@@ -36,7 +36,21 @@ from airflow.operators.email_operator import EmailOperator
 from airflow.operators.subdag_operator import SubDagOperator
 from airflow.models import Variable
 from airflow import AirflowException
+import logging
 
+
+"""Version of dag.
+
+For very small non-functional change, do not modify.  For small changes for performance
+and optimization, minor version number.  For 'additions', minor version changee.
+For very large changes, major version number change.
+
+The initial operator should attempt to print out any necessary provenance
+so that it is in the log (such as command line options).  Somehow provide
+some version information for dependencies (preferably automatically).
+"""
+
+VERSION = "0.1"
 BATCH_SIZE = Variable.get('BATCH_SIZE', 1024) 
 START_DATE = datetime(2020, 4, 4)
 
@@ -45,7 +59,7 @@ configs = Variable.get('em_processing_configs', default_var=[], deserialize_json
 
 for config in configs:
 
-    DAG_NAME = f'em_processing_{config.get("id")}'
+    DAG_NAME = f'em_processing_{config.get("id")}_{VERSION}'
 
     # each dagrun is executed once and at time of submission
     DEFAULT_ARGS = {
@@ -68,34 +82,41 @@ for config in configs:
 
     def validate_params(**kwargs):
         """Check that img name, google bucket, and image range is specified.
+
+        TODO: log other relevant version infromation if available.
         """
 
         # check if email is provided
         email_addr = kwargs['dag_run'].conf.get('email')
         if email_addr is None:
-            return False
-
+            raise AirflowException("no email provided")
+        
+        logging.info(f"Email provided: {email_addr}")
+    
         # format string for image name4yy
         name = config.get('image')
         if name is None:
-            return False
+            raise AirflowException("no image exists")
 
         # check for [minz, maxz] values
         minz = config.get('minz')
         if minz is None:
-            return False
+            raise AirflowException("no minz exists")
 
         maxz = config.get('maxz')
         if maxz is None:
-            return False
+            raise AirflowException("no maxz exists")
 
         if minz > maxz:
-            return False
+            raise AirflowException("no maxz should be greater than or equal to minz")
 
         # location of storage (i.e., storage bucket name)
         location = config.get('source')
         if location is None:
-            return False
+            raise AirflowException("no location exists")
+        
+        # ?! check if images are there
+
 
     # validate parameters
     validate_t = PythonOperator(
