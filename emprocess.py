@@ -22,7 +22,9 @@ Append configs for each run type to variable "em_processing_configs":
     }
     ]
 
-Setup a default email for notifications
+Setup a default email for airflow notifications
+
+Configure email smptp as appropriate
 
 """
 
@@ -33,7 +35,6 @@ from airflow.utils.trigger_rule import TriggerRule
 from airflow.operators.email_operator import EmailOperator
 from airflow.operators.subdag_operator import SubDagOperator
 from airflow.models import Variable
-
 
 BATCH_SIZE = Variable.get('BATCH_SIZE', 1024) 
 START_DATE = datetime(2020, 4, 4)
@@ -112,7 +113,7 @@ for config in configs:
                 start_date=START_DATE,
                 )
         
-        def compute_affine_ph(img1, img2, source):
+        def compute_affine_ph(img1, img2, src):
             """Compute affine between two images (placeholde)
             """
             return [1, 0, 0, 1, 0, 0]
@@ -129,7 +130,6 @@ for config in configs:
                 context['task_instance'].xcom_push(key="affine", value=value)
 
             # ?! write transforms to align/tranforms.csv
-
             # push bbox
             context['task_instance'].xcom_push(key="bbox", value=[2042, 3201])
 
@@ -220,7 +220,7 @@ for config in configs:
                 dag=subdag
                 )
 
-        def write_pyramid_ph(z, y, x, name, source, tile_size, chunk):
+        def write_pyramid_ph(z, y, x, name, source, chunk):
             """Write pyramid in ng for provide chunk.
             """
             pass
@@ -255,7 +255,6 @@ for config in configs:
     isaligned_t = BranchPythonOperator(
         task_id='branching',
         python_callable=lambda: "align",
-        provide_context=True,
         dag=dag)
 
     # delete temp tile images (*.png) (run if align_t succeeds and ngingest finishes)
