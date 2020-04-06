@@ -35,6 +35,7 @@ from airflow.utils.trigger_rule import TriggerRule
 from airflow.operators.email_operator import EmailOperator
 from airflow.operators.subdag_operator import SubDagOperator
 from airflow.models import Variable
+from airflow import AirflowException
 
 BATCH_SIZE = Variable.get('BATCH_SIZE', 1024) 
 START_DATE = datetime(2020, 4, 4)
@@ -129,6 +130,7 @@ for config in configs:
                 value = context['task_instance'].xcom_pull(task_ids=f"affine_{slice}")
                 context['task_instance'].xcom_push(key="affine", value=value)
 
+                #break
             # ?! write transforms to align/tranforms.csv
             # push bbox
             context['task_instance'].xcom_push(key="bbox", value=[2042, 3201])
@@ -171,7 +173,8 @@ for config in configs:
             )
         
             affine_t >> collect_t
-        
+            #break
+
         collect_t >> write_align_t
 
         return subdag
@@ -202,6 +205,8 @@ for config in configs:
 
             # ?! setup ng configuration (probably use VM)
             print(source, bbox)
+            #raise AirflowException("setup failed")
+
 
         def extract_range(pt1, pt2):
             start = pt1 // BATCH_SIZE
@@ -251,10 +256,19 @@ for config in configs:
         dag=dag,
         )
 
+    # pull xcom from a subdag
+    def iswritten(**context):
+        value = context['task_instance'].xcom_pull(dag_id=f"{DAG_NAME}.align", task_ids="write_align")
+        if value:
+            return "cleanup_images"
+        raise AirflowException("branch failed")
+
     # conditional for successful alignment
     isaligned_t = BranchPythonOperator(
         task_id='branching',
-        python_callable=lambda: "align",
+        python_callable=iswritten,
+        trigger_rule=TriggerRule.ALL_DONE,
+        provide_context=True,
         dag=dag)
 
     # delete temp tile images (*.png) (run if align_t succeeds and ngingest finishes)
@@ -269,7 +283,6 @@ for config in configs:
                     python_callable=cleanup_images_ph,
                     dag=dag,
                     op_kwargs={'source': config.get("source")},
-                    trigger_rule=TriggerRule.ALL_DONE
                 )
 
     # notify user
@@ -281,7 +294,7 @@ for config in configs:
             dag=dag
     )
 
-    validate_t >> align_t >> ngingest_t >> [cleanup_t,  notify_t]
-    align_t >> isaligned_t >> cleanup_t 
+    validate_t >> align_t >> ngingest_t >> notify_t
+    [align_t, ngingest_t] >> isaligned_t >> cleanup_t 
 
 
