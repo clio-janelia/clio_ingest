@@ -29,7 +29,7 @@ Configure email smptp as appropriate
 """
 
 from airflow.models import DAG
-from airflow.operators.python_operator import PythonOperator, BranchPythonOperator
+from airflow.operators.python_operator import PythonOperator, BranchPythonOperator, ShortCircuitOperator
 from datetime import datetime
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.operators.email_operator import EmailOperator
@@ -41,9 +41,12 @@ import logging
 
 """Version of dag.
 
-For very small non-functional change, do not modify.  For small changes for performance
-and optimization, minor version number.  For 'additions', minor version changee.
-For very large changes, major version number change.
+For very small non-functional change, do not modify.   For small changes for performance
+and optimization that don't impact DAG or results greatly, modify subversion.
+
+For task 'additions' and bigger optimization
+changes, minor version change.  For very large DAG changes, major version number change.
+Both minor and major version changes will reseult in a new DAG workflow.
 
 The initial operator should attempt to print out any necessary provenance
 so that it is in the log (such as command line options).  Somehow provide
@@ -51,6 +54,7 @@ some version information for dependencies (preferably automatically).
 """
 
 VERSION = "0.1"
+SUBVERSION = "1"
 BATCH_SIZE = Variable.get('BATCH_SIZE', 1024) 
 START_DATE = datetime(2020, 4, 4)
 
@@ -85,6 +89,8 @@ for config in configs:
 
         TODO: log other relevant version infromation if available.
         """
+
+        logging.info(f"Version({VERSION}) Sub-version({SUBVERSION})")
 
         # check if email is provided
         email_addr = kwargs['dag_run'].conf.get('email')
@@ -174,6 +180,7 @@ for config in configs:
 
             """
             # ?! get xcom
+            #raise AirflowException("write failed")
             return True
 
         # apply affines and write results 
@@ -277,16 +284,17 @@ for config in configs:
         dag=dag,
         )
 
-    # pull xcom from a subdag
+    # pull xcom from a subdag to see if data was written
     def iswritten(**context):
         value = context['task_instance'].xcom_pull(dag_id=f"{DAG_NAME}.align", task_ids="write_align")
-        if value:
-            return "cleanup_images"
-        raise AirflowException("branch failed")
+        logging.info(value)
+        if value is not None:
+            return value
+        return False
 
     # conditional for successful alignment
-    isaligned_t = BranchPythonOperator(
-        task_id='branching',
+    isaligned_t = ShortCircuitOperator(
+        task_id='iswritten',
         python_callable=iswritten,
         trigger_rule=TriggerRule.ALL_DONE,
         provide_context=True,
