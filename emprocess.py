@@ -1,18 +1,36 @@
 """Workflow to ingest and process EM data.
 
+--Settings--
+
 Command line json:
 {
     email: foo@bar # where to send results
+    createRawPyramid: True # create raw scale pyramid in addition to jpeg (True is default)
 }
 
-Configuration:
+Input: images in a source/raw/*.png
+
+Environment: If testing locally without data, set AIRFLOW_TEST_MODE=1
+
+Airflow Configuration:
 
 Setup a pool with 500 workers for lightweight http requests
 called "http_requests".
 
-Set variable BATCH_SIZE (optional)
+Setup a default email for airflow notifications
 
-Append configs for each run type to variable "em_processing_configs":
+Configure email smptp as appropriate
+
+Conn id:
+
+* ALIGN_CLOUD_RUN (str): http address
+* IMG_READ_WRITE (str): http address
+
+Airflow Variables:
+
+* SHARD_SIZE (optional): default 1024
+
+* Append configs for each run type to variable "em_processing_configs":
 
     [{
     image: "template%d.png", # template name
@@ -22,9 +40,6 @@ Append configs for each run type to variable "em_processing_configs":
     }
     ]
 
-Setup a default email for airflow notifications
-
-Configure email smptp as appropriate
 
 """
 
@@ -33,10 +48,24 @@ from airflow.operators.python_operator import PythonOperator, BranchPythonOperat
 from datetime import datetime
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.operators.email_operator import EmailOperator
+from airflow.operators.bash_operator import BashOperator
 from airflow.operators.subdag_operator import SubDagOperator
 from airflow.models import Variable
 from airflow import AirflowException
+
 import logging
+import json
+
+# custom local dependencies
+from emprocess import align, pyramid
+
+# check if in testing mode
+import os
+TEST_MODE_ENV = os.environ.get("AIRFLOW_TEST_MODE", None)
+TEST_MODE = False
+if TEST_MODE_ENV is not None:
+    TEST_MODE = True
+
 
 
 """Version of dag.
@@ -53,9 +82,9 @@ so that it is in the log (such as command line options).  Somehow provide
 some version information for dependencies (preferably automatically).
 """
 
-VERSION = "0.1"
+VERSION = "0.2"
 SUBVERSION = "1"
-BATCH_SIZE = Variable.get('BATCH_SIZE', 1024) 
+SHARD_SIZE = Variable.get('SHARD_SIZE', 1024) 
 START_DATE = datetime(2020, 4, 4)
 
 # dynamically create DAGs for em_procesing based on configs
@@ -86,19 +115,25 @@ for config in configs:
 
     def validate_params(**kwargs):
         """Check that img name, google bucket, and image range is specified.
-
-        TODO: log other relevant version infromation if available.
         """
 
         logging.info(f"Version({VERSION}) Sub-version({SUBVERSION})")
+        logging.info(f"Chunk size: {SHARD_SIZE})")
 
         # check if email is provided
         email_addr = kwargs['dag_run'].conf.get('email')
         if email_addr is None:
             raise AirflowException("no email provided")
-        
+
         logging.info(f"Email provided: {email_addr}")
-    
+
+        # check raw pyrmaid config
+        if kwargs['dag_run'].conf.get('createRawPyramid', True):
+            logging.info("Enables raw pyramid creation")
+        else:
+            logging.info("Disable raw pyramid creation")
+       
+
         # format string for image name4yy
         name = config.get('image')
         if name is None:
@@ -114,16 +149,13 @@ for config in configs:
             raise AirflowException("no maxz exists")
 
         if minz > maxz:
-            raise AirflowException("no maxz should be greater than or equal to minz")
+            raise AirflowException("no maxz should be greater than minz")
 
         # location of storage (i.e., storage bucket name)
         location = config.get('source')
         if location is None:
             raise AirflowException("no location exists")
         
-        # ?! check if images are there
-
-
     # validate parameters
     validate_t = PythonOperator(
             task_id="validate",
@@ -132,162 +164,18 @@ for config in configs:
             dag=dag,
             )
 
-    # alignment workflo which is a sub dag
-    def align_workflow(parent, name, minz, maxz, source, collect_id):
-        """Sub dag dynamically creates alignment tasks.
-        """
-        subdag = DAG(
-                f"{parent}.align",
-                start_date=START_DATE,
-                )
-        
-        def compute_affine_ph(img1, img2, src):
-            """Compute affine between two images (placeholde)
-            """
-            return [1, 0, 0, 1, 0, 0]
 
+    align_start_t, align_end_t = align.align_dataset_psubdag(dag, "align", config.get("image"), config.get("minz"),
+        config.get("maxz"), config.get("source"), "http_requests", TEST_MODE)
 
-        def collect_affine_ph(**context):
-            """Create transform array.
-            """
-
-            # ?! combine affines
-            # read each transform and create global coordinate system
-            for slice in range(minz, maxz+1):
-                value = context['task_instance'].xcom_pull(task_ids=f"affine_{slice}")
-                context['task_instance'].xcom_push(key="affine", value=value)
-
-                #break
-            # ?! write transforms to align/tranforms.csv
-            # push bbox
-            context['task_instance'].xcom_push(key="bbox", value=[2042, 3201])
-
-        # find global coordinate system and write transforms
-        collect_t = PythonOperator(
-            task_id=collect_id,
-            python_callable=collect_affine_ph,
-            provide_context=True,
-            dag=subdag,
-        )
-
-        # write alignd images
-        def write_align_ph():
-            """Apply transform and write files.
-
-            Aligned images are saved in align/*.png
-
-            Chunked BATCH_SIZExBATCH_SIZE file format is stored at tmp/*.png
-
-            """
-            # ?! get xcom
-            #raise AirflowException("write failed")
-            return True
-
-        # apply affines and write results 
-        write_align_t = PythonOperator(
-            task_id="write_align",
-            python_callable=write_align_ph,
-            dag=subdag,
-        )
-
-        # run pairwise affine calculation
-        for slice in range(minz, maxz):
-            affine_t = PythonOperator(
-                task_id=f"affine_{slice}",
-                python_callable=compute_affine_ph,
-                pool="http_requests",
-                dag=subdag,
-                op_kwargs={'img1': name%slice, 'img2': name%(slice+1),'src': source},
-            )
-        
-            affine_t >> collect_t
-            #break
-
-        collect_t >> write_align_t
-
-        return subdag
-
-    # create subdag for alignment
-    align_t = SubDagOperator(
-        subdag = align_workflow(DAG_NAME, config.get("image"), config.get("minz"),
-            config.get("maxz"), config.get("source"), "create_volume_coords"),
-        task_id="align",
-        dag=dag,
-        )
-
-    # write neuroglancer scale pyramid
-    def neuroglancer_ingest_workflow(parent, child, name, minz, maxz, source, bbox):
-        """Creates scale pyramid and writes to ng format.
-
-        Note: date is written to location/neuroglancer/*
-        """
-
-        subdag = DAG(
-                f"{parent}.{child}",
-                start_date=START_DATE
-                )
-       
-        def setup_config_ph():
-            """Write configuration for ng multiscale format.
-            """
-
-            # ?! setup ng configuration (probably use VM)
-            print(source, bbox)
-            #raise AirflowException("setup failed")
-
-
-        def extract_range(pt1, pt2):
-            start = pt1 // BATCH_SIZE
-            finish = pt2 // BATCH_SIZE
-            if (pt2 % BATCH_SIZE) != 0:
-                finish += 1
-            return start, finish
-        zstart, zfinish = extract_range(minz, maxz)
-        ystart, yfinish = extract_range(0, bbox[1])
-        xstart, xfinish = extract_range(0, bbox[0])
-       
-        setup_config_t = PythonOperator(
-                task_id="setup_ng_config",
-                python_callable=setup_config_ph,
-                pool="http_requests",
-                dag=subdag
-                )
-
-        def write_pyramid_ph(z, y, x, name, source, chunk):
-            """Write pyramid in ng for provide chunk.
-            """
-            pass
-
-        for iterz in range(zstart, zfinish+1):
-            for itery in range(ystart, yfinish+1):
-                for iterx in range(xstart, xstart+1):
-                    ng_pyramid_t = PythonOperator(
-                        task_id=f"ng_pyrmaid_{iterz}_{itery}_{iterx}",
-                        python_callable=write_pyramid_ph,
-                        pool="http_requests",
-                        dag=subdag,
-                        op_kwargs={'z': iterz, 'y': itery, 'x': iterx, 'name': name, 'source': source, 'chunk': BATCH_SIZE}
-                    )
-                    setup_config_t >> ng_pyramid_t
-
-        return subdag    
-
-
-    # ?! how to extract image range??
-    # create subdag for ingestion
-    ngingest_t = SubDagOperator(
-        subdag = neuroglancer_ingest_workflow(DAG_NAME, "ngingest", config.get("image"), config.get("minz"),
-            config.get("maxz"), config.get("source"), [2000, 2000]), # "create_volume_coords"),
-        #subdag = sub_dag(DAG_NAME, dag.img_name, dag.minz, dag.maxz, dag.source,
-        #    {{ task_instance.xcom_pull(task_ids="create_volume_coords", key="bbox") }}),
-        task_id="ngingest",
-        dag=dag,
-        )
+    
+    ngingest_start_t, ngingest_end_t = pyramid.export_dataset_psubdag(dag, "ngingest", config.get("image"), config.get("minz"),
+        config.get("maxz"), config.get("source"), align_end_t.task_id, "http_requests", TEST_MODE)
 
     # pull xcom from a subdag to see if data was written
     def iswritten(**context):
-        value = context['task_instance'].xcom_pull(dag_id=f"{DAG_NAME}.align", task_ids="write_align")
-        logging.info(value)
+        #value = context['task_instance'].xcom_pull(dag_id=f"{DAG_NAME}.align", task_ids="write_align")
+        value = context['task_instance'].xcom_pull(task_ids=align_end_t.task_id)
         if value is not None:
             return value
         return False
@@ -300,18 +188,28 @@ for config in configs:
         provide_context=True,
         dag=dag)
 
-    # delete temp tile images (*.png) (run if align_t succeeds and ngingest finishes)
-    def cleanup_images_ph(source):
-        """Deletes source/tmp/*.png temporary pngs.
-        """
-        # ?! delete data from source
-        pass
+    # delete source-{execution_time}/(*.png) (run if align_t succeeds and ngingest finishes)
+    lifecycle_config = {
+                        "lifecycle": {
+                            "rule": [
+                                {
+                                    "action": {"type": "Delete"},
+                                    "condition": {
+                                        "age": 0
+                                        }
+                                }
+                                ]
+                        }
+                        }
+    commands = f"echo {json.dumps(lifecycle_config)} > life.json"
+    if not TEST_MODE:
+        commands += f"gsutil lifecycle set life.json gs://{config.get('source')}-" + "{{ execution_date }}"
+    commands += "rm life.json"
 
-    cleanup_t = PythonOperator(
+    cleanup_t = BashOperator(
                     task_id="cleanup_images",
-                    python_callable=cleanup_images_ph,
+                    bash_command=commands,
                     dag=dag,
-                    op_kwargs={'source': config.get("source")},
                 )
 
     # notify user
@@ -323,7 +221,11 @@ for config in configs:
             dag=dag
     )
 
-    validate_t >> align_t >> ngingest_t >> notify_t
-    [align_t, ngingest_t] >> isaligned_t >> cleanup_t 
+    # cleanup is triggered if alignment completes properly
+    validate_t >> align_start_t
+    align_end_t >> ngingest_start_t
+    [ngingest_end_t, cleanup_t] >> notify_t
+    
+    [align_end_t, ngingest_end_t] >> isaligned_t >> cleanup_t 
 
 
