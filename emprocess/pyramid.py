@@ -30,9 +30,7 @@ from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 from airflow.hooks.http_hook import HttpHook
 
 import json
-
-SHARD_SIZE = Variable.get('SHARD_SIZE', 1024) 
-NUM_WORKERS = 500 # should have decent parallelism on cloud run
+import logging
 
 def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, pool=None, TEST_MODE=False):
     """Creates ingsetion tasks for creating neuroglancer precomputed volumees.
@@ -52,7 +50,13 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
         (starting dag task, ending dag task)
 
     """
-
+    SHARD_SIZE = Variable.get('SHARD_SIZE', 1024) 
+    NUM_WORKERS = 500 # should have decent parallelism on cloud run
+        
+    # when testing only use 10 workers
+    if TEST_MODE:
+        NUM_WORKERS = 10
+     
     # write meta data for location/ng/jpeg and location/ng/raw
     create_ngmeta_t = SimpleHttpOperator(
         task_id=f"{dag.dag_id}.{name}.write_ngmeta",
@@ -63,7 +67,7 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
                 "location": source,
                 "minz": minz,
                 "maxz": maxz,
-                "bbox": "{{{{ task_instance.xcom_pull(task_id='{bbox_task_id}', key='bbox') }}}}",
+                "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
                 "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}"
         },
         headers={"Accept": "application/json, text/plain, */*"},
@@ -75,10 +79,14 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
     def write_ng_shards(temp_location, bbox, writeRaw, worker_id):
         """Write shards by invoking several http requests based on bbox and worker id.
         """
+        bbox = json.loads(bbox)
+        writeRaw = json.loads(writeRaw.lower())
+
         def extract_range(pt1, pt2):
             start = pt1 // SHARD_SIZE
             finish = pt2 // SHARD_SIZE
-            
+            return start, finish
+
         zstart, zfinish = extract_range(minz, maxz)
         ystart, yfinish = extract_range(0, bbox[1]-1)
         xstart, xfinish = extract_range(0, bbox[0]-1)
@@ -116,14 +124,14 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
             python_callable=write_ng_shards,
             op_kwargs={
                     "temp_location": f"{source}-" + "{{ execution_date }}",
-                    "bbox": "{{{{ task_instance.xcom_pull(task_id='{bbox_task_id}', key='bbox') }}}}",
+                    "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
                     "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}",
                     "worker_id": worker_id
             },
             pool=pool,
             dag=dag,
         )
-    
+
         create_ngmeta_t >> write_shards_t >> finish_t
 
     # provide bookend tasks to caller

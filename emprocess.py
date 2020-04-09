@@ -82,7 +82,7 @@ so that it is in the log (such as command line options).  Somehow provide
 some version information for dependencies (preferably automatically).
 """
 
-VERSION = "0.2"
+VERSION = "0.2.6"
 SUBVERSION = "1"
 SHARD_SIZE = Variable.get('SHARD_SIZE', 1024) 
 START_DATE = datetime(2020, 4, 4)
@@ -134,7 +134,7 @@ for config in configs:
             logging.info("Disable raw pyramid creation")
        
 
-        # format string for image name4yy
+        # format string for image name
         name = config.get('image')
         if name is None:
             raise AirflowException("no image exists")

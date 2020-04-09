@@ -26,6 +26,7 @@ from airflow.operators.python_operator import PythonOperator
 from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 
 import json
+import logging
 
 def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_MODE=False):
     """Creates aligntment tasks and communicates a resulting bounding box
@@ -130,9 +131,10 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
             mod_affine.append(last_affine[0]*curr_affine[2] + last_affine[2]*curr_affine[3])
             mod_affine.append(last_affine[1]*curr_affine[2] + last_affine[3]*curr_affine[3])
             
-            mod_affine.append(last_affine[0]*curr_affine[4] + last_affine[2]*curr_affine[5] + curr_affine[4])
-            mod_affine.append(last_affine[1]*curr_affine[4] + last_affine[3]*curr_affine[5] + curr_affine[5])
-          
+            mod_affine.append(last_affine[0]*curr_affine[4] + last_affine[2]*curr_affine[5] + last_affine[4])
+            mod_affine.append(last_affine[1]*curr_affine[4] + last_affine[3]*curr_affine[5] + last_affine[5])
+         
+            last_affine = mod_affine
             # add affine to list
             transforms.append(mod_affine)
 
@@ -162,8 +164,10 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
             curr_affine[4] = curr_affine[4]-global_bbox[0] # shift by min x
             curr_affine[5] = curr_affine[5]-global_bbox[2] # shift by min y
             context['task_instance'].xcom_push(key=f"{slice}", value=curr_affine)
-            affines_csv += f"{slice} , '{curr_affine}'"
+            affines_csv += f"{slice} , '{curr_affine}'\n"
 
+        logging.info(affines_csv)
+        logging.info([global_bbox[1]-global_bbox[0], global_bbox[3]-global_bbox[2]])
         # push bbox for new image size
         context['task_instance'].xcom_push(key="bbox", value=[global_bbox[1]-global_bbox[0], global_bbox[3]-global_bbox[2]])
         # test mode disable
@@ -210,7 +214,7 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
             affine_t = SimpleHttpOperator(
                 task_id=f"{dag.dag_id}.{name}.affine_{slice}",
                 http_conn_id="ALIGN_CLOUD_RUN",
-                endpoint="",
+                endpoint="/",
                 data={
                         "img1": image % slice,
                         "img2": image % (slice+1),
@@ -222,19 +226,21 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
                 dag=dag
             )
             start_t >> affine_t >> collect_t
-
+        
+        transform_val = f"{{{{ task_instance.xcom_pull(task_ids='{collect_id}', key='{slice}') }}}}"
+        bbox_val = f"{{{{ task_instance.xcom_pull(task_ids='{collect_id}', key='bbox') }}}}"
         # write collected transforms back to google bucket (including temporary tile data)
         write_aligned_image_t = SimpleHttpOperator(
             task_id=f"{dag.dag_id}.{name}.write_{slice}",
             http_conn_id="IMG_READ_WRITE",
-            endpoint="",
+            endpoint="/",
             data={
                     "mode": "writealign",
                     "img": image % slice,
                     "src-tmp": source + "-" + "{{ execution_date }}",
                     "src": source,
-                    "transform": "{{{{ task_instance.xcom_pull(task_id='{collect_id}', key='{slice}') }}}}",
-                    "bbox": "{{{{ task_instance.xcom_pull(task_id='{collect_id}', key='bbox') }}}}"
+                    "transform": transform_val, 
+                    "bbox": bbox_val 
             },
             headers={"Accept": "application/json, text/plain, */*"},
             pool=pool,
