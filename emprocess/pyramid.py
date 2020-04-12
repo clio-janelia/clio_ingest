@@ -61,13 +61,13 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
     create_ngmeta_t = SimpleHttpOperator(
         task_id=f"{dag.dag_id}.{name}.write_ngmeta",
         http_conn_id="IMG_READ_WRITE",
-        endpoint="",
+        endpoint="/ngmeta",
         data={
-                "mode": "ngconfig",
-                "location": source,
+                "dest": source,
                 "minz": minz,
                 "maxz": maxz,
                 "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
+                "shard_size": SHARD_SIZE,
                 "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}"
         },
         headers={"Accept": "application/json, text/plain, */*"},
@@ -101,11 +101,10 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
                         # call function that writes shard (exception raised for non-200, 300 response)
                         http = HttpHook("POST", http_conn_id="IMG_READ_WRITE")
                         response = http.run(
-                                    "POST",
+                                    "/ngshard",
                                     {
-                                            "mode": "ngshard",
-                                            "location": source, # will write to location + /ng/raw or /ng/jpeeg
-                                            "source": temp_location, # location of tilese 
+                                            "dest": source, # will write to location + /ng/raw or /ng/jpeeg
+                                            "source": temp_location, # location of tiles
                                             "start": [iterx, itery, iterz],
                                             "shard_size": SHARD_SIZE,
                                             "minz": minz,

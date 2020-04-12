@@ -272,14 +272,13 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
         write_aligned_image_t = SimpleHttpOperator(
             task_id=f"{dag.dag_id}.{name}.write_{slice}",
             http_conn_id="IMG_READ_WRITE",
-            endpoint="/",
+            endpoint="/alignedslice",
             data={
-                    "mode": "writealign",
                     "img": image % slice,
-                    "src-tmp": source + "-" + "{{ execution_date }}",
-                    "src": source,
                     "transform": transform_val, 
-                    "bbox": bbox_val 
+                    "bbox": bbox_val, 
+                    "dest-tmp": source + "-" + "{{ execution_date }}",
+                    "dest": source
             },
             headers={"Accept": "application/json, text/plain, */*"},
             pool=pool,
