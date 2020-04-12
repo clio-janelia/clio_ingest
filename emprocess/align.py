@@ -27,6 +27,7 @@ from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 
 import json
 import logging
+from emprocess import fiji_script
 
 def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_MODE=False):
     """Creates aligntment tasks and communicates a resulting bounding box
@@ -104,23 +105,53 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
             x1 = affine[0]*x+affine[2]*y+affine[4]
             y1 = affine[1]*x+affine[3]*y+affine[5]
             return (round(x1), round(y1))
-       
+      
+        def process_results(res):
+            """Determines whether affine or translation is used.
+            The transform is also adjusted for a top-left origin
+            and reorders the paramters to list col1, col2, and col3.
+            """
+
+            # default no-op
+            affine = [1, 0, 0, 1, 0, 0]
+            translation = [1, 0, 0, 1, 0, 0]
+
+            width = res["width"]
+            height = res["height"]
+
+            def adjust_trans(trans):
+                """Flips Y and moves origin to top left.
+                """
+                dx = trans[2] - (1 - trans[0])*width/2 + trans[1]*height/2
+                dy = trans[5] - (1 - trans[0])*width/2 + trans[1]*height/2
+                return [trans[0], -trans[1], -trans[3], trans[4], dx, dy]
+
+            affine = adjust_trans(res["affine"])
+            translation = adjust_trans(res["translation"])
+
+
+            # use translatee coefficients if image rotated less than 0.5 percent
+            if affine[2] <= 0.0008:
+                affine = translation
+            return affine, [width, height]
+
         # read each transform and create global coordinate system
         # (note: each transform is applied to n+1 slice, image sizes are assumed to have identical dims)
         last_affine = [1, 0, 0, 1, 0, 0]
         transforms = [[1, 0, 0, 1, 0, 0]]
         
-        # store curreent bbox x range and y range and find max
+        # store current bbox x range and y range and find max
         bbox = None
         global_bbox = None
         for slice in range(minz, maxz):
             res = json.loads(context['task_instance'].xcom_pull(task_ids=f"{dag.dag_id}.{name}.affine_{slice}"))
             # affine has already been modified to treat top-left of image as origin
-            curr_affine = res["affine"] 
+            
+            # process results
+            curr_affine, bbox = process_results(res)
             
             # get bbox
             if slice == minz:
-                bbox = res["bbox"]
                 global_bbox = [0, bbox[0], 0, bbox[1]] 
     
             # multiply matrices
@@ -209,16 +240,24 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
     # align each pair of images, find global offsets, write results
     for slice in range(minz, maxz+1):
         if slice < maxz:
+            img1 = "gs://" + source + "/" + image % slice 
+            img2 = "gs://" + source + "/" + image % (slice+1) 
+
             #compute affine match between two images.
             #note: files are expected in src/raw/*
             affine_t = SimpleHttpOperator(
                 task_id=f"{dag.dag_id}.{name}.affine_{slice}",
                 http_conn_id="ALIGN_CLOUD_RUN",
-                endpoint="/",
+                endpoint="",
                 data={
-                        "img1": image % slice,
-                        "img2": image % (slice+1),
-                        "src": source,
+                        "command": "-Xmx4g -XX:+UseCompressedOops -Dpre=\"img1.png\" -Dpost=\"img2.png\" -- --headless \"fiji_align.bsh\"",
+                    "input-map": {
+                            "img1.png": img1,
+                            "img2.png": img2 
+                    },
+                    "input-str": {
+                            fiji_script.SCRIPT
+                    }
                 },
                 xcom_push=True, # push affine results to next task
                 headers={"Accept": "application/json, text/plain, */*"},
