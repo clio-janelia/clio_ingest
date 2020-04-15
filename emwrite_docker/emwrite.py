@@ -115,7 +115,7 @@ def ngmeta():
         
         bucket_name = config_file["dest"] # contains source and destination
         minz  = config_file["minz"]
-        maxz  = config_file["maxz"])
+        maxz  = config_file["maxz"]
         [width, height]  = json.loads(config_file["bbox"])
         shard_size  = config_file["shard_size"] 
         if shard_size != 1024:
@@ -152,7 +152,7 @@ def ngshard():
         bucket_tiled_name = config_file["source"] # contains image tiles
         tile_chunk = config_file["start"]
         minz  = config_file["minz"]
-        maxz  = config_file["maxz"])
+        maxz  = config_file["maxz"]
         [width, height]  = json.loads(config_file["bbox"])
         shard_size  = config_file["shard_size"] 
         if shard_size != 1024:
@@ -261,7 +261,7 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
         maxz += ( 1024 - (maxz % shard_size))
 
     # load json (don't need tensorflow)
-    return config = {
+    return {
        "@type" : "neuroglancer_multiscale_volume",
        "data_type" : "uint8",
        "num_channels" : 1,

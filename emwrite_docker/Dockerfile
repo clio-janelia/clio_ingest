@@ -1,15 +1,9 @@
-ARG BASE=quay.io/pypa/manylinux2014_x86_64
+FROM ubuntu:19.10
 
-FROM $BASE
-
-LABEL description="A docker image for building portable Python linux binary wheels using modern GCC"
-LABEL maintainer="jbms@google.com"
-
-RUN yum -y update && yum -y install \
-    python3 \
-    python3-devel \
-    devtoolset-9-gcc-c++ \
-    && yum clean all
+RUN apt-get update \
+ && apt-get install -y python3-dev \
+                       python3-pip \
+                       build-essential
 
 ENV PATH="/opt/rh/devtoolset-9/root/usr/bin:$PATH"
 
@@ -19,7 +13,12 @@ RUN python3 -m pip install numpy
 RUN python3 -m pip install pillow
 RUN python3 -m pip install gunicorn
 RUN python3 -m pip install google-cloud-storage
+RUN python3 -m pip install flask 
+RUN python3 -m pip install flask-cors
+RUN python3 -m pip install scipy
+
+CMD bash
 
 COPY emwrite.py ./ 
-CMD exec ${FLYEM_ENV}/bin/gunicorn --bind :$PORT --workers 1 --threads 1 emwrite:app 
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 1 emwrite:app 
 
