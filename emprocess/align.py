@@ -50,6 +50,7 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
         (starting dag task, ending dag task)
 
     """
+    SHARD_SIZE = Variable.get('SHARD_SIZE', 1024) 
   
     # starting task (check for the existence of the raw/*.png data
     def check_data(**context):
@@ -278,6 +279,8 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
                     "transform": transform_val, 
                     "bbox": bbox_val, 
                     "dest-tmp": source + "-" + "{{ execution_date }}",
+                    "slice": slice,
+                    "shard_size": SHARD_SIZE,
                     "dest": source
             },
             headers={"Accept": "application/json, text/plain, */*"},

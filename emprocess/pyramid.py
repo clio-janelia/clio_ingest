@@ -107,6 +107,7 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
                                             "source": temp_location, # location of tiles
                                             "start": [iterx, itery, iterz],
                                             "shard_size": SHARD_SIZE,
+                                            "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
                                             "minz": minz,
                                             "maxz": maxz,
                                             "writeRaw": writeRaw 
