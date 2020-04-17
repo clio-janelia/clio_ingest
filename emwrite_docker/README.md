@@ -45,7 +45,7 @@ The supported endpoints are:
 	"dest": "destination bucket for ng volumes",
 	"minz": 0,
 	"maxz": 1234,
-	"shard_size": 1024,
+	"shard-size": 1024,
 	"bbox": "[width, height] -- string of per image bounding bbox",
 	"writeRaw": "True -- string value for boolean indicating whether raw+jpeg should be written or just jpeg"
 }
@@ -58,8 +58,9 @@ The supported endpoints are:
 	"dest": "destination bucket for ng volumes",
 	"source": "bucket containing temporary tiled images",
 	"start": [1, 2, 1],
-	"shard_size": 1024,
+	"shard-size": 1024,
 	"minz": 0,
+	"bbox": "[width, height] -- string of per image bounding bbox",
 	"maxz": 1234
 	"writeRaw": "True -- string value for boolean indicating whether raw+jpeg should be written or just jpeg"
 }

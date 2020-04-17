@@ -20,5 +20,4 @@ RUN python3 -m pip install scipy
 CMD bash
 
 COPY emwrite.py ./ 
-CMD exec gunicorn --bind :$PORT --workers 1 --threads 1 emwrite:app 
-
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 1 emwrite:app --timeout 900
