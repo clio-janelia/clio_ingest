@@ -67,7 +67,7 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
                 "minz": minz,
                 "maxz": maxz,
                 "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
-                "shard_size": SHARD_SIZE,
+                "shard-size": SHARD_SIZE,
                 "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}"
         },
         headers={"Accept": "application/json, text/plain, */*"},
@@ -106,7 +106,7 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
                                             "dest": source, # will write to location + /ng/raw or /ng/jpeeg
                                             "source": temp_location, # location of tiles
                                             "start": [iterx, itery, iterz],
-                                            "shard_size": SHARD_SIZE,
+                                            "shard-size": SHARD_SIZE,
                                             "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
                                             "minz": minz,
                                             "maxz": maxz,

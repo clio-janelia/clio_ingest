@@ -8,7 +8,7 @@ class myHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type','application/json')
         self.end_headers()
 	# Send the html message
-        self.wfile.write(json.dumps({"width": 1500, "height": 2000, "affine": [1, 0, 0, 0, 1, 1], "translation": [1, 0, 0, 0, 1, 1]}).encode())
+        self.wfile.write(json.dumps({"width": 1500, "height": 2000, "affine": [1, 0, 0, 1, 0, 1], "translation": [1, 0, 0, 1, 0, 1]}).encode())
         return
 
 server = HTTPServer(('', 9000), myHandler)

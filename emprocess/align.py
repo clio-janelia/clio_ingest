@@ -123,9 +123,9 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
             def adjust_trans(trans):
                 """Flips Y and moves origin to top left.
                 """
-                dx = trans[2] - (1 - trans[0])*width/2 + trans[1]*height/2
-                dy = trans[5] - (1 - trans[0])*width/2 + trans[1]*height/2
-                return [trans[0], -trans[1], -trans[3], trans[4], dx, dy]
+                dx = trans[4] - (1 - trans[0])*width/2 + trans[2]*height/2
+                dy = trans[5] - (1 - trans[3])*height/2 + trans[1]*width/2
+                return [trans[0], -trans[2], -trans[1], trans[3], dx, dy]
 
             affine = adjust_trans(res["affine"])
             translation = adjust_trans(res["translation"])
@@ -280,7 +280,7 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
                     "bbox": bbox_val, 
                     "dest-tmp": source + "-" + "{{ execution_date }}",
                     "slice": slice,
-                    "shard_size": SHARD_SIZE,
+                    "shard-size": SHARD_SIZE,
                     "dest": source
             },
             headers={"Accept": "application/json, text/plain, */*"},
