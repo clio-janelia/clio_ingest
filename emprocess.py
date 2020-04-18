@@ -201,10 +201,10 @@ for config in configs:
                                 ]
                         }
                         }
-    commands = f"echo {json.dumps(lifecycle_config)} > life.json"
+    commands = f"echo {json.dumps(lifecycle_config)} > life.json;\n"
     if not TEST_MODE:
-        commands += f"gsutil lifecycle set life.json gs://{config.get('source')}_" + "{{ ds_nodash }}"
-    commands += "rm life.json"
+        commands += f"gsutil lifecycle set life.json gs://{config.get('source')}_" + "{{ ds_nodash }};\n"
+    commands += "rm life.json;"
 
     cleanup_t = BashOperator(
                     task_id="cleanup_images",

@@ -212,11 +212,12 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, pool
             blob.upload_from_string(affines_csv) 
             
             # create bucket for temporary images
-            from google.api_core.exceptions import Conflict
             try:
                 ghook.create_bucket(bucket_name=temp_location, project_id=project_id)
-            except Conflict:
-                pass
+            except AirflowException as e:
+                # ignore if the erorr is the bucket exists
+                if not str(e).startswith("409"):
+                    raise
 
     # find global coordinate system and write transforms
     collect_id = f"{dag.dag_id}.{name}.collect"

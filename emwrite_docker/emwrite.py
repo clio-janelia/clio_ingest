@@ -192,7 +192,6 @@ def ngshard():
            
             with io.BytesIO() as output:
                 im.save(output, format="PNG")
-                blob = bucket_temp.blob("debug.png")
                 blob.upload_from_string(output.getvalue(), content_type="image/png")
 
             if slice == zstart:
