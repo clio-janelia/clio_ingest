@@ -16,6 +16,7 @@ from math import ceil
 from scipy import ndimage
 import io
 import traceback
+import threading
 
 app = Flask(__name__)
 
@@ -170,7 +171,7 @@ def ngshard():
         vol3d = None
 
         # fetch 1024x1024 tile from each imagee 
-        for slice in range(zstart, zfinish+1):
+        def set_image(slice, vol3d=None):
             blob = bucket_temp.blob(str(slice))
             
             # read offset binary
@@ -190,13 +191,24 @@ def ngshard():
             img_array = np.array(im)
             height2, width2 = im.height, im.width
            
-            with io.BytesIO() as output:
-                im.save(output, format="PNG")
-                blob.upload_from_string(output.getvalue(), content_type="image/png")
+            #with io.BytesIO() as output:
+            #    blob = bucket_temp.blob(str(slice)+".png")
+            #    im.save(output, format="PNG")
+            #    blob.upload_from_string(output.getvalue(), content_type="image/png")
 
             if slice == zstart:
                 vol3d = np.zeros((zfinish-zstart+1, height2, width2), dtype=np.uint8)
             vol3d[(slice-zstart), :, :] = img_array
+            return vol3d
+
+        vol3d = set_image(zstart)
+
+        threads = [threading.Thread(target=set_image, args=(slice, vol3d)) for slice in range(zstart+1, zfinish+1)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
 
         # write grayscale for each level
         num_levels = 5
