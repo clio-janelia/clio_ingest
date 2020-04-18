@@ -201,7 +201,7 @@ for config in configs:
                                 ]
                         }
                         }
-    commands = f"echo {json.dumps(lifecycle_config)} > life.json;\n"
+    commands = f"echo '{json.dumps(lifecycle_config)}' > life.json;\n"
     if not TEST_MODE:
         commands += f"gsutil lifecycle set life.json gs://{config.get('source')}_" + "{{ ds_nodash }};\n"
     commands += "rm life.json;"
