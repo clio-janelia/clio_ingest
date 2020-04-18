@@ -23,11 +23,11 @@ in align.py for more details regarding this decision.
 
 from airflow.models import Variable
 from airflow import AirflowException
-from airflow.operators.http_operator import SimpleHttpOperator
 from airflow.operators.python_operator import PythonOperator
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 from airflow.hooks.http_hook import HttpHook
+from emprocess.cloudrun_operator import CloudRunOperator
 
 import json
 import logging
@@ -61,7 +61,7 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
     NUM_WORKERS = min(NUM_WORKERS, maxz-minz+1)
 
     # write meta data for location/ng/jpeg and location/ng/raw
-    create_ngmeta_t = SimpleHttpOperator(
+    create_ngmeta_t = CloudRunOperator(
         task_id=f"{dag.dag_id}.{name}.write_ngmeta",
         http_conn_id="IMG_WRITE",
         endpoint="/ngmeta",
@@ -96,6 +96,15 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
         
         glb_iter = 0
 
+        # get auth
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"}
+        try:
+            import subprocess
+            token = subprocess.check_output(["gcloud auth print-identity-token"], shell=True).decode()
+            headers["Authorization"] = f"Bearer {token}"
+        except Exception:
+            pass
+
         for iterz in range(zstart, zfinish+1):
             for itery in range(ystart, yfinish+1):
                 for iterx in range(xstart, xstart+1):
@@ -115,7 +124,7 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
                                             "maxz": maxz,
                                             "writeRaw": json.dumps(writeRaw) 
                                     }),
-                                    {"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"},
+                                    headers,
                                     {}
                                     )
 

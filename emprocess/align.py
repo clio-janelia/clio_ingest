@@ -21,13 +21,13 @@ subdag operator.
 
 from airflow.models import Variable
 from airflow import AirflowException
-from airflow.operators.http_operator import SimpleHttpOperator
 from airflow.operators.python_operator import PythonOperator
 from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 
 import json
 import logging
 from emprocess import fiji_script
+from emprocess.cloudrun_operator import CloudRunOperator
 
 def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, pool=None, TEST_MODE=False):
     """Creates aligntment tasks and communicates a resulting bounding box
@@ -251,7 +251,7 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, pool
 
             #compute affine match between two images.
             #note: files are expected in src/raw/*
-            affine_t = SimpleHttpOperator(
+            affine_t = CloudRunOperator(
                 task_id=f"{dag.dag_id}.{name}.affine_{slice}",
                 http_conn_id="ALIGN_CLOUD_RUN",
                 endpoint="",
@@ -275,7 +275,7 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, pool
         transform_val = f"{{{{ task_instance.xcom_pull(task_ids='{collect_id}', key='{slice}') }}}}"
         bbox_val = f"{{{{ task_instance.xcom_pull(task_ids='{collect_id}', key='bbox') }}}}"
         # write collected transforms back to google bucket (including temporary tile data)
-        write_aligned_image_t = SimpleHttpOperator(
+        write_aligned_image_t = CloudRunOperator(
             task_id=f"{dag.dag_id}.{name}.write_{slice}",
             http_conn_id="IMG_WRITE",
             endpoint="/alignedslice",
