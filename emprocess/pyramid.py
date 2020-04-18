@@ -2,7 +2,7 @@
 
 This module creates an image pyramid in neuroglancer format from a
 list of aligned images.  The images are stored in a temporary bucket
-called source_{{ execution_date }}, where each image is encoded as an 
+called source_{{ ds_nodash }}, where each image is encoded as an 
 array of 1024x1024 tiles.  The tiles are located encoded in the file
 as deterimined by the header.  The header is N*4 bytes (N is
 the number of tiles) which gives the offset for each tile in the larger file.
@@ -56,21 +56,24 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
     # when testing only use 10 workers
     if TEST_MODE:
         NUM_WORKERS = 10
-     
+    
+    # do not need more workers than slices
+    NUM_WORKERS = min(NUM_WORKERS, maxz-minz+1)
+
     # write meta data for location/ng/jpeg and location/ng/raw
     create_ngmeta_t = SimpleHttpOperator(
         task_id=f"{dag.dag_id}.{name}.write_ngmeta",
-        http_conn_id="IMG_READ_WRITE",
+        http_conn_id="IMG_WRITE",
         endpoint="/ngmeta",
-        data={
+        data=json.dumps({
                 "dest": source,
                 "minz": minz,
                 "maxz": maxz,
                 "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
                 "shard-size": SHARD_SIZE,
                 "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}"
-        },
-        headers={"Accept": "application/json, text/plain, */*"},
+        }),
+        headers={"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"},
         dag=dag
     )
 
@@ -99,20 +102,20 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
                     glb_iter += 1
                     if (glb_iter % NUM_WORKERS) == worker_id:
                         # call function that writes shard (exception raised for non-200, 300 response)
-                        http = HttpHook("POST", http_conn_id="IMG_READ_WRITE")
+                        http = HttpHook("POST", http_conn_id="IMG_WRITE")
                         response = http.run(
                                     "/ngshard",
-                                    {
+                                    json.dumps({
                                             "dest": source, # will write to location + /ng/raw or /ng/jpeeg
                                             "source": temp_location, # location of tiles
                                             "start": [iterx, itery, iterz],
                                             "shard-size": SHARD_SIZE,
-                                            "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
+                                            "bbox": json.dumps(bbox),
                                             "minz": minz,
                                             "maxz": maxz,
-                                            "writeRaw": writeRaw 
-                                    },
-                                    {"Accept": "application/json, text/plain, */*"},
+                                            "writeRaw": json.dumps(writeRaw) 
+                                    }),
+                                    {"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"},
                                     {}
                                     )
 
@@ -123,7 +126,7 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
             task_id=f"{dag.dag_id}.{name}.write_ng_shards_{worker_id}",
             python_callable=write_ng_shards,
             op_kwargs={
-                    "temp_location": f"{source}-" + "{{ execution_date }}",
+                    "temp_location": f"{source}_" + "{{ ds_nodash }}",
                     "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
                     "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}",
                     "worker_id": worker_id

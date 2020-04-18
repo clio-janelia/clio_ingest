@@ -99,7 +99,7 @@ def alignedslice():
 
         # write to cloud
         bucket_temp = storage_client.bucket(bucket_name_temp)
-        blob = bucket.blob(str(slicenum))
+        blob = bucket_temp.blob(str(slicenum))
         blob.upload_from_string(final_binary, content_type="application/octet-stream")
 
         r = make_response("success".encode())
@@ -121,7 +121,7 @@ def ngmeta():
         shard_size  = config_file["shard-size"] 
         if shard_size != 1024:
             raise RuntimeError("shard size must be 1024x1024x1024")
-        write_raw  = config_file["writeRaw"]
+        write_raw  = json.loads(config_file["writeRaw"].lower())
 
         # write jpeg config to bucket/neuroglancer/raw/info
         storage_client = storage.Client()
@@ -158,7 +158,7 @@ def ngshard():
         shard_size  = config_file["shard-size"] 
         if shard_size != 1024:
             raise RuntimeError("shard size must be 1024x1024x1024")
-        write_raw  = config_file["writeRaw"]
+        write_raw  = json.loads(config_file["writeRaw"].lower())
 
         # extract 1024x1024x1024 cube based on tile chunk
         zstart = max(shard_size*tile_chunk[2], minz)

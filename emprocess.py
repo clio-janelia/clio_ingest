@@ -24,7 +24,7 @@ Configure email smptp as appropriate
 Conn id:
 
 * ALIGN_CLOUD_RUN (str): http address
-* IMG_READ_WRITE (str): http address
+* IMG_WRITE (str): http address
 
 Airflow Variables:
 
@@ -97,7 +97,7 @@ for config in configs:
     # each dagrun is executed once and at time of submission
     DEFAULT_ARGS = {
             "owner": "airflow",
-            "retries":1,
+            "retries": 1,
             "start_date": START_DATE,
             "email_on_failure": True,
             "email_on_retry": True,
@@ -166,7 +166,7 @@ for config in configs:
 
 
     align_start_t, align_end_t = align.align_dataset_psubdag(dag, "align", config.get("image"), config.get("minz"),
-        config.get("maxz"), config.get("source"), "http_requests", TEST_MODE)
+        config.get("maxz"), config.get("source"), config.get("project"), "http_requests", TEST_MODE)
 
     
     ngingest_start_t, ngingest_end_t = pyramid.export_dataset_psubdag(dag, "ngingest", config.get("image"), config.get("minz"),
@@ -188,14 +188,14 @@ for config in configs:
         provide_context=True,
         dag=dag)
 
-    # delete source-{execution_time}/(*.png) (run if align_t succeeds and ngingest finishes)
+    # delete source_{ds_nodash}/(*.png) (run if align_t succeeds and ngingest finishes) -- let it survive for 1 day in case there are re-runs and the same policy is still in effect
     lifecycle_config = {
                         "lifecycle": {
                             "rule": [
                                 {
                                     "action": {"type": "Delete"},
                                     "condition": {
-                                        "age": 0
+                                        "age": 1
                                         }
                                 }
                                 ]
@@ -203,7 +203,7 @@ for config in configs:
                         }
     commands = f"echo {json.dumps(lifecycle_config)} > life.json"
     if not TEST_MODE:
-        commands += f"gsutil lifecycle set life.json gs://{config.get('source')}-" + "{{ execution_date }}"
+        commands += f"gsutil lifecycle set life.json gs://{config.get('source')}_" + "{{ ds_nodash }}"
     commands += "rm life.json"
 
     cleanup_t = BashOperator(

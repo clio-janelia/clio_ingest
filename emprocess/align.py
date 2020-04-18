@@ -29,7 +29,7 @@ import json
 import logging
 from emprocess import fiji_script
 
-def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_MODE=False):
+def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, pool=None, TEST_MODE=False):
     """Creates aligntment tasks and communicates a resulting bounding box
     and success based on returned task instance's output.
 
@@ -63,11 +63,11 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
 
         # grab all files in raw
         ghook = GoogleCloudStorageHook() # uses default gcp connection
-        file_names = hook.list(source, prefix="raw/")
+        file_names = ghook.list(source, prefix="raw/")
         file_names = set(file_names)
 
         for slice in range(minz, maxz):
-            if ("raw/" + (iamge % slice)) not in file_names:  
+            if ("raw/" + (image % slice)) not in file_names:  
                 raise AirflowException("raw data not loaded properly")
 
 
@@ -212,7 +212,11 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
             blob.upload_from_string(affines_csv) 
             
             # create bucket for temporary images
-            ghook.create_bucket(temp_location)
+            from google.api_core.exceptions import Conflict
+            try:
+                ghook.create_bucket(bucket_name=temp_location, project_id=project_id)
+            except Conflict:
+                pass
 
     # find global coordinate system and write transforms
     collect_id = f"{dag.dag_id}.{name}.collect"
@@ -220,7 +224,7 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
         task_id=collect_id,
         python_callable=collect_affine,
         provide_context=True,
-        op_kwargs={'temp_location': f"{source}-" + "{{ execution_date }}"},
+        op_kwargs={'temp_location': f"{source}_" + "{{ ds_nodash }}"},
         dag=dag,
     )
  
@@ -241,8 +245,8 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
     # align each pair of images, find global offsets, write results
     for slice in range(minz, maxz+1):
         if slice < maxz:
-            img1 = "gs://" + source + "/" + image % slice 
-            img2 = "gs://" + source + "/" + image % (slice+1) 
+            img1 = "gs://" + source + "/raw/" + image % slice 
+            img2 = "gs://" + source + "/raw/" + image % (slice+1) 
 
             #compute affine match between two images.
             #note: files are expected in src/raw/*
@@ -250,18 +254,18 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
                 task_id=f"{dag.dag_id}.{name}.affine_{slice}",
                 http_conn_id="ALIGN_CLOUD_RUN",
                 endpoint="",
-                data={
+                data=json.dumps({
                         "command": "-Xmx4g -XX:+UseCompressedOops -Dpre=\"img1.png\" -Dpost=\"img2.png\" -- --headless \"fiji_align.bsh\"",
                     "input-map": {
                             "img1.png": img1,
                             "img2.png": img2 
                     },
                     "input-str": {
-                            fiji_script.SCRIPT
+                            "fiji_align.bsh": fiji_script.SCRIPT
                     }
-                },
+                }),
                 xcom_push=True, # push affine results to next task
-                headers={"Accept": "application/json, text/plain, */*"},
+                headers={"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"},
                 pool=pool,
                 dag=dag
             )
@@ -272,18 +276,18 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, pool=None, TEST_
         # write collected transforms back to google bucket (including temporary tile data)
         write_aligned_image_t = SimpleHttpOperator(
             task_id=f"{dag.dag_id}.{name}.write_{slice}",
-            http_conn_id="IMG_READ_WRITE",
+            http_conn_id="IMG_WRITE",
             endpoint="/alignedslice",
-            data={
+            data=json.dumps({
                     "img": image % slice,
                     "transform": transform_val, 
                     "bbox": bbox_val, 
-                    "dest-tmp": source + "-" + "{{ execution_date }}",
+                    "dest-tmp": source + "_" + "{{ ds_nodash }}",
                     "slice": slice,
                     "shard-size": SHARD_SIZE,
                     "dest": source
-            },
-            headers={"Accept": "application/json, text/plain, */*"},
+            }),
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"},
             pool=pool,
             dag=dag
         )

@@ -125,8 +125,8 @@ if (!(affineFound && translationFound)) {
 /* export results */
 try {
 	System.out.println("{");
-	System.out.println("\"width\":" + imp1.getWidth().toString() + ",");
-	System.out.println("\"height\":" + imp1.getHeight().toString() + ",");
+	System.out.println("\\"width\\":" + imp1.getWidth().toString() + ",");
+	System.out.println("\\"height\\":" + imp1.getHeight().toString() + ",");
 	
 	/*JSONObject obj = new JSONObject();
 
@@ -142,17 +142,17 @@ try {
 	if ( affineFound ) {
 		double[] affine_arr = new double[6];
 		affine.toArray(affine_arr);
-		System.out.println("\"affine\":" + Arrays.toString(affine_arr) + ",");
+		System.out.println("\\"affine\\":" + Arrays.toString(affine_arr) + ",");
 	} else {
-		System.out.println("\"affine\": [1, 0, 0, 0, 1, 0],");
+		System.out.println("\\"affine\\": [1, 0, 0, 0, 1, 0],");
 	}
 
 	if ( translationFound ) {
 		double[] trans_arr = new double[6];
 		translation.toArray(trans_arr);
-		System.out.println("\"translation\":" + Arrays.toString(trans_arr));
+		System.out.println("\\"translation\\":" + Arrays.toString(trans_arr));
 	} else {
-		System.out.println("\"translation\": [1, 0, 0, 0, 1, 0],");
+		System.out.println("\\"translation\\": [1, 0, 0, 0, 1, 0],");
 	}
 	System.out.println("}");
 }
