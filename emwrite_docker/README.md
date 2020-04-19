@@ -79,6 +79,14 @@ If a container already exists, one can build faster from cache with this command
 
 	% gcloud builds submit --config cloudbuild.yaml
 
+Alternatively, one can use docker to build and deploy, which is many cases could be
+more convenient since the locally tested image can just be uploaded.  The following
+links gcloud with docker, builds a container, and uploads:
+
+	% configure docker with gcloud: gcloud auth configure-docker
+	$ docker build . -t gcr.io/flyem-private/emwrite
+	$ docker push  gcr.io/flyem-private/emwrite
+
 Once the container is built, deploy to cloud run with the following command.
 The instance is created with a maximum 2GB of memory and sets the concurrency to 1
 per instance.  Two cores are specified
