@@ -14,7 +14,8 @@ class CloudRunOperator(SimpleHttpOperator):
             self,
             *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        
+
+    def execute(self, context):
         # add authorization if not presen and gcloud is available
         if "Authorization" not in self.headers:
             # extract auth token from gcloud
@@ -23,3 +24,6 @@ class CloudRunOperator(SimpleHttpOperator):
                 self.headers["Authorization"] = f"Bearer {token}"
             except Exception:
                 pass
+
+        return super().execute(context)
+
