@@ -52,8 +52,8 @@ Several variables must be set to enable the em_processing DAG to be executed.
 
 * Under Admin->Connections create ALIGN_CLOUD_RUN conn_id pointing to the http server running fiji
 * Under Admin->Connections create IMG_WRITE conn_id pointing to the http server running emwrite
-* Under Admin->Variables create "em_processing_configs" and set the value to the specifc workflow (see
-example for defining new workflows in "Running a workflow").
+* Under Admin->Variables create "em_processing_configs" and set the value to the specifc workflows supported (see
+example for defining new workflows in "Running a workflow").  There is a separate configuration or workflow for each image dataset and for each significant code version.
 * Under Admin->Pools create "http_requests" and set to 500 if using Google Cloud Run or the capacity
 of whatever is serving the alignment and writing web services.
 * (local use) Setup email to enable Airflow to send notifications.
@@ -94,7 +94,7 @@ Airflow will not be able to create a workflow DAG corresponding to this file.
 To test the installation, the following can be run locally without requiring cloud run
 functions or source data.
 
-* Add a workflow into the "em_processing_configs" variable.
+* Add a workflow into the "em_processing_configs" array variable.
 
 ```json
 
@@ -103,7 +103,7 @@ functions or source data.
 	"id": "sample",
 	"image": "img%05d.png",
 	"minz": 0,
-	"maxz": 10
+	"maxz": 10,
 	"source": "sample_bucket", 
 	"project": "flyem-private"
 }
