@@ -21,7 +21,7 @@ class CloudRunOperator(SimpleHttpOperator):
             # extract auth token from gcloud
             try:
                 token = subprocess.check_output(["gcloud auth print-identity-token"], shell=True).decode()
-                self.headers["Authorization"] = f"Bearer {token}"
+                self.headers["Authorization"] = f"Bearer {token[:-1]}"
             except Exception:
                 pass
 

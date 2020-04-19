@@ -101,7 +101,7 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
         try:
             import subprocess
             token = subprocess.check_output(["gcloud auth print-identity-token"], shell=True).decode()
-            headers["Authorization"] = f"Bearer {token}"
+            headers["Authorization"] = f"Bearer {token[:-1]}"
         except Exception:
             pass
 
