@@ -1,1 +1,0 @@
-The working version of ubuntu is not currently support in cloud run.  This directory contains an image that implements most of the endpoints (excluding neuroglancer shard writing) to facilitate testing.

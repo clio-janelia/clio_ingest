@@ -177,7 +177,7 @@ Then run:
 
 	% gsutil cors set cors.json gs://[bucket name]
 
-Navigate to [neuroglance](https://neuroglancer-demo.appspot.com/) and point the source to precomputed://gs://[bucket name]/neuroglancer/jpeg.
+Navigate to [neuroglancer](https://neuroglancer-demo.appspot.com/) and point the source to precomputed://gs://[bucket name]/neuroglancer/jpeg.
 
 ## Architecture Description
 
