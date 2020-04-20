@@ -41,7 +41,7 @@ imgPathPost = System.getProperty( "post", "./post.png" );
 
 /* custom parameters */
 p.fdSize = 4;
-p.maxOctaveSize = 4096;
+p.maxOctaveSize = 2048;
 p.minOctaveSize = 64;
 maxSteps = 5;
 
