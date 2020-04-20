@@ -73,7 +73,7 @@ cloud project account.  Creating a new environment can be done easily by followi
 in [https://cloud.google.com/composer/docs/quickstart](https://cloud.google.com/composer/docs/quickstart).
 Once created, the settings should be configured as described above.  Composer allows users to interact
 with the environment using the familiar Airflow web browser.  Environment variables can be set 
-through the Composer UI.  em_process.py ./emprocess directory can be uploaded to a cloud bucket associated
+through the Composer UI.  em_process.py file and ./emprocess directory can be uploaded to a cloud bucket associated
 under the Composer DAGs folder.
 
 Airflow in Google Composer can be accessed via a user terminal command line by prepending an airflow
@@ -93,7 +93,7 @@ Airflow will not be able to create a workflow DAG corresponding to this file.
 To test the installation, the following can be run locally without requiring cloud run
 functions or source data.
 
-* Add a workflow into the "em_processing_configs" array variable.
+Add a workflow into the "em_processing_configs" array variable.
 
 ```json
 
@@ -108,6 +108,7 @@ functions or source data.
 }
 ]
 ```
+
 To avoid Google Cloud Storage during the test, SET the environment
 AIRFLOW_TEST_MODE to anything (unset when starting production work).
 
@@ -117,7 +118,7 @@ and IMG_WRITE to point to it.
 
 	% python moc_server.py
 
-Once the em_processing workflow is enabled (see web interface), a DAG execution
+Once the em_processing workflow is enabled (using the Airflow web interface), a DAG execution
 run can be performed using the following command-line.
 
 	% airflow trigger_dag -r refactor1 -c '{"email": "your email"}' em_processing_sample_0.1
@@ -130,12 +131,12 @@ in general but rather of this very simple scheduler.  It is also not a problem w
 
 ## Running a workflow
 
-To process a stack of EM images the following needs to be done.
+To process a stack of EM images, the following needs to be done.
 
 * load a set of PNG images to a storage bucket in the directory "raw" (GBUCKET/raw/\*.png)
 * ensure that AIRFLOW_TEST_MODE is unset
 * make sure that ALIGN_CLOUD_RUN and IMG_WRITE are set to point to the docker containers serving
-fiji and em writing applications.
+fiji and emwrite applications.
 * create a configuration with a name for the workflow ("id"), the image
 name string format ("image"), the first image slice ("minz"), the last slice ("maxz"),
 the gbucket source ("source"), and the google project id ("project").  The configuration
@@ -156,10 +157,9 @@ After this configuration is added to "em_processing_configs", the workflow will 
 in the web application.  Note: a version number is appended to the workflow name: em_processing_[id]_[version].
 To run:
 
-
 	% airflow trigger_dag -r test1 -c '{"email": "your email"}' em_processing_slice2_0.1
 
-The semantics are slightly different when triggering Airflow through Composer on the command line)
+The semantics are slightly different when triggering Airflow through Composer on the command line:
 
 	% airflow trigger_dag -- em_processing_slice2_0.1 --run_id test1 --conf '{"email": "your email"}' 
 
@@ -195,10 +195,10 @@ Navigate to [neuroglancer](https://neuroglancer-demo.appspot.com/) and point the
 Apache Airflow was chosen to orchestrate the data processing for a few reasons.  Processing EM image data
 for connectomics or other analysis requires several processing steps often with diverse
 compute, communication, and memory requirements.  Airflow is well-designed
-to manage a diversity of different types of compute or "operators" and providing for automatic
-retries on failures.  It also has a great substrate
+to manage a diversity of different types of compute or "operators" and provide for automatic
+retries on failures.  It is a good substrate
 to try to organize these diverse steps into a cogent execution model.  There are other tools that can
-manage data on compute clusters such as Spark and Google Dataflow; however, many of the operations
+process data using multiple workers such as Spark and Google Dataflow; however, many of the operations
 required in our pipeline are very simple, batch-oriented compute.  Furthermore, Airflow can call
 these other technologies for parts of the pipeline that might better utilizee those technology
 stacks.  Finally, Airflow is well supported and documented and provides a good web UI for debugging
@@ -215,11 +215,11 @@ Managing versioning in Airflow
 seems a bit messy.  If a workflow changes, it is probably best to add the version number to the 
 DAG name, so it is a distinctly named workflow.  There is not much dynamicism in the DAGs.  The DAGs
 need to be parseable and created before execution of the DAG (DAG run).  Since the datasets for emprocessing
-use a unique task for each image, a distinct DAG is needed for each dataset if it has a different
-number of images.  The DAG cannot adapt
+use a unique task for each image, a distinct DAG is needed for every dataset if they have different
+numbers of images.  The DAG cannot adapt
 to the shape of the data during execution,
-which is why in emprocessing, there is a fixed-number worker task pool size
-to write neuroglancer data since the number of tasks are unknown beforehand.
+which is why in emprocessing, there is a fixed-number worker task-pool size
+to write neuroglancer data, since the number of tasks are unknown beforehand.
 Some of these design decisions are a reflection on the history of using Airflow to do
 scheduled, repeatable 'cron' jobs (which can also be seen by the execution time variable that is required
 even for manual, non-scheduled invocations).
@@ -240,26 +240,26 @@ Airflow is designed to orchestrate different types of compute.  But the implemen
 distinct operations are often in the Airflow application as well (encouraged by the diversity
 of custom operators).  This mixture of implementation logic
 and orchestration seems a little messy.  It is nicely argued [here](https://towardsdatascience.com/how-to-use-airflow-without-headaches-4e6e37e6c2bc), that a better paradigm would be to
-only orhestrate kubernetes pods which can then encapsulate all the logic distinctly.  It would also
+only orhestrate docker operators or kubernetes pods which can then encapsulate all the logic distinctly.  It would also
 allow users to not have to spend a lot of time understanding the myriad of operators available in Airflow.
 This seems
-like a reasonable approach except some tasks are just a lot more easily implemented with
+like a reasonable approach except some tasks are just a lot more efficiently implemented with
 custom operators and embedded logic.
 
 
-### emprocessing Design
+### emprocessing_workflow Design
 
-The emprocessing workflow was designed to provide a some dynamicism and version tracking to manage
+The emprocessing workflow was designed to provide some dynamicism and version tracking to manage
 the (hopefully) one-time execution run for each dataset.  To generate a DAG for a new dataset, a configuration
 spec is loaded into an Airflow variable (available to all DAGs and during DAG runs).  Once this
 configuration is loaded, Airflow will automatically generate a new workflow for this dataset giving
-a unique DAG exists for each dataset (airflow frequently polls all files in the dag folder and it is best
+a unique DAG exists for each dataset (airflow frequently polls all files in the dag folder to update available workflows and it is best
 practice to keep the computation at the top-level simple and non-compute intensive).
 However, only one template for a DAG is defined in 
-emprocss.py; specific instances are generated based on an iteration through the configuration
+emprocess.py; specific DAG instances are generated based on an iteration through the configuration
 specs.  emprocess.py also specifies a version number.  When large changes are made to the code, the user
-should modify this number which will automatically trigger a new set of workflows tagged with the new
-version ID to be created.  Airflow keeps the runtime information for any previous DAG runs
+should modify this number, which will automatically trigger a new set of workflows tagged with the new
+version ID to be created.  Airflow keeps the runtime information for any previous DAG runs,
 but in this way future invocations will be explicitly separated.
 
 The high-level orchestration of tasks is shown in the figure above (details on the major components below).
@@ -269,14 +269,13 @@ is included as a dependency to the main dag file) but without the sub-dag semant
 limitations mentioned above.  But it should be pretty straightforward to convert this to sub-dags
 if improvements are made in future versions of Airflow.
 
-The majority of compute is not run on the Airflow clusteer but rather using the serverless
+The majority of compute is not run on the Airflow cluster but rather using the serverless
 Cloud Run platform.  This seeems to combine several ideal features: 1) it can run in a generic
-docker container separating logic from python code in the DAG, 2) it auto-scales from to 1000
+docker container separating logic from python code in the DAG, 2) it auto-scales from 0 to 1000
 compute nodes, and 3) it is serverless, requiring no provisioning.  Cloud run functions
-are used in alignment and in pyramid writing.  A separate worker pool is created for operators
+are used in alignment and in pyramid writing.  A separate worker connection pool is created for operators
 that call these http-based endpoints, since several hundred can potentially be executed
 in parallel even on a lightly-provisioned machine.
-
 
 ### Description of workflow components
 
@@ -293,7 +292,7 @@ transformation using RANSAC over matched SIFT features.  If there is little defo
 in the transformation, a rigid, translation only transformation is favored.  Once these
 transforms are computed across all adjacent images, the results are combined and a global
 bounding box is computed for the volume.  The images are then written to the "align"
-directory along with the transformation matrix used.  Future work could make this more
+directory along with the transformation matrices used.  Future work could make this more
 robust by matching every other slice or to find large transformations as a mechanism
 to screen for outliers.  This component also writes out temporary files (one per 2d image),
 which encodes each image as an array of 1024x1024 tiles.
@@ -304,7 +303,7 @@ The dataset is written to /neuroglancer/jpeg and neuroglancer/raw (optional) usi
 neuroglancer's [pre-computed sharded format](https://github.com/google/neuroglancer/blob/master/src/neuroglancer/datasource/precomputed/sharded.md#sharding-specification).  Each "shard" is a separate
 file that encodes several small chunks which can be effienctly retrieved for interactive
 viewing.  The purpose of the "shard" is to have very few files to make copying the dataset
-fast, while still allowinig fast indexing into small chunks when only needing parts
+fast, while still allowing fast indexing into small chunks when only needing parts
 of the dataset.
 
 This component pre-allocates 500 workers that iterate through different
