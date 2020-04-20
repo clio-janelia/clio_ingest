@@ -81,7 +81,6 @@ command with the following:
 
 	% gcloud composer environments run [name of environment] --location [location] [airflow arguments]
 
-
 ## Testing local install
 
 After installing locally, one can verify that the workflow parses properly by running
@@ -124,7 +123,10 @@ run can be performed using the following command-line.
 	% airflow trigger_dag -r refactor1 -c '{"email": "your email"}' em_processing_sample_0.1
 
 One can monitor progress through the web front-end.  Each task instance including its inputs, outputs, and logs
-can be viewed.  
+can be viewed.  Note: the default execution management is done with a sequential scheduler.  As such,
+the example will run very slowly as only one task can run at a time and the scheduler takes several
+seconds until a new task is picked up.  This is not a limitatioin of Airflow
+in general but rather of this very simple scheduler.  It is also not a problem when using Google Composer.
 
 ## Running a workflow
 
@@ -152,8 +154,14 @@ below can be used for the iso.\* images found in the resources/ folder.
 
 After this configuration is added to "em_processing_configs", the workflow will appear
 in the web application.  Note: a version number is appended to the workflow name: em_processing_[id]_[version].
+To run:
 
-	% airflow trigger_dag -r refactor1 -c '{"email": "your email"}' em_processing_slice2_0.1
+
+	% airflow trigger_dag -r test1 -c '{"email": "your email"}' em_processing_slice2_0.1
+
+The semantics are slightly different when triggering Airflow through Composer on the command line)
+
+	% airflow trigger_dag -- em_processing_slice2_0.1 --run_id test1 --conf '{"email": "your email"}' 
 
 Once this workflow finishes, one can view the ingested data using neuroglancer.
 To do this, the bucket must be publicly readable to be used by neuroglancer
@@ -181,22 +189,136 @@ Navigate to [neuroglancer](https://neuroglancer-demo.appspot.com/) and point the
 
 ## Architecture Description
 
-TBD
 
-## Description of components in workflow
+### Why Airflow?
+
+Apache Airflow was chosen to orchestrate the data processing for a few reasons.  Processing EM image data
+for connectomics or other analysis requires several processing steps often with diverse
+compute, communication, and memory requirements.  Airflow is well-designed
+to manage a diversity of different types of compute or "operators" and providing for automatic
+retries on failures.  It also has a great substrate
+to try to organize these diverse steps into a cogent execution model.  There are other tools that can
+manage data on compute clusters such as Spark and Google Dataflow; however, many of the operations
+required in our pipeline are very simple, batch-oriented compute.  Furthermore, Airflow can call
+these other technologies for parts of the pipeline that might better utilizee those technology
+stacks.  Finally, Airflow is well supported and documented and provides a good web UI for debugging
+and analyzing workflow runs.  Since Airflow is a generic solution, it seemed more likely to be portable
+in other cloud or compute environments.  We chose Google Composer since it wraps
+Apache Airflow in a way that makes deployment easy.
+
+### Downsides
+
+There are a few downsides to Airflow and the use of Google Composer.  The following elaborates on several
+as it helped to guide design decisions.
+
+Managing versioning in Airflow
+seems a bit messy.  If a workflow changes, it is probably best to add the version number to the 
+DAG name, so it is a distinctly named workflow.  There is not much dynamicism in the DAGs.  The DAGs
+need to be parseable and created before execution of the DAG (DAG run).  Since the datasets for emprocessing
+use a unique task for each image, a distinct DAG is needed for each dataset if it has a different
+number of images.  The DAG cannot adapt
+to the shape of the data during execution,
+which is why in emprocessing, there is a fixed-number worker task pool size
+to write neuroglancer data since the number of tasks are unknown beforehand.
+Some of these design decisions are a reflection on the history of using Airflow to do
+scheduled, repeatable 'cron' jobs (which can also be seen by the execution time variable that is required
+even for manual, non-scheduled invocations).
+
+Airflow has a concept of sub-graph which intuitively should encapsulate sub-DAGs of computation
+that can be re-used or represent and distinct and closely related group of tasks.  However,
+the implementation of sub-graphs is such that the sub-graph operator (entry point to the sub-graph)
+runs on a separate worker for the duration of the sub-graph computation.  If that worker crashes for some
+reason the whole sub-graph dies, which might lead to undesirable results.
+
+Google Composer
+does not offer a serverless solution, requiring at least 3 nodes to run Airflow.  It seems that with
+the ability to use Cloud Run or dynamic Kubernetes cluster, pre-allocation of compute would be
+unnecessary and enable an on-demand, light-weight
+web service that is always available, which would be ideal from a costing point-of-view.
+
+Airflow is designed to orchestrate different types of compute.  But the implementation for these
+distinct operations are often in the Airflow application as well (encouraged by the diversity
+of custom operators).  This mixture of implementation logic
+and orchestration seems a little messy.  It is nicely argued [here](https://towardsdatascience.com/how-to-use-airflow-without-headaches-4e6e37e6c2bc), that a better paradigm would be to
+only orhestrate kubernetes pods which can then encapsulate all the logic distinctly.  It would also
+allow users to not have to spend a lot of time understanding the myriad of operators available in Airflow.
+This seems
+like a reasonable approach except some tasks are just a lot more easily implemented with
+custom operators and embedded logic.
+
+
+### emprocessing Design
+
+The emprocessing workflow was designed to provide a some dynamicism and version tracking to manage
+the (hopefully) one-time execution run for each dataset.  To generate a DAG for a new dataset, a configuration
+spec is loaded into an Airflow variable (available to all DAGs and during DAG runs).  Once this
+configuration is loaded, Airflow will automatically generate a new workflow for this dataset giving
+a unique DAG exists for each dataset (airflow frequently polls all files in the dag folder and it is best
+practice to keep the computation at the top-level simple and non-compute intensive).
+However, only one template for a DAG is defined in 
+emprocss.py; specific instances are generated based on an iteration through the configuration
+specs.  emprocess.py also specifies a version number.  When large changes are made to the code, the user
+should modify this number which will automatically trigger a new set of workflows tagged with the new
+version ID to be created.  Airflow keeps the runtime information for any previous DAG runs
+but in this way future invocations will be explicitly separated.
+
+The high-level orchestration of tasks is shown in the figure above (details on the major components below).
+In general, the code was designed to make each component (alignment and pyramid creation)
+ a sub-dag in code design (each component
+is included as a dependency to the main dag file) but without the sub-dag semantics given the
+limitations mentioned above.  But it should be pretty straightforward to convert this to sub-dags
+if improvements are made in future versions of Airflow.
+
+The majority of compute is not run on the Airflow clusteer but rather using the serverless
+Cloud Run platform.  This seeems to combine several ideal features: 1) it can run in a generic
+docker container separating logic from python code in the DAG, 2) it auto-scales from to 1000
+compute nodes, and 3) it is serverless, requiring no provisioning.  Cloud run functions
+are used in alignment and in pyramid writing.  A separate worker pool is created for operators
+that call these http-based endpoints, since several hundred can potentially be executed
+in parallel even on a lightly-provisioned machine.
+
+
+### Description of workflow components
 
 The major components of the workflow are alignment and pyramid
 image ingestion.  Future work includes adding contrast enhancement
 and various deep learning components for segmentation and synapse
-prediction and other feature representation.
+prediction and other feature extraction.
 
-### alignment with FIJI
-### writing scale pyramid into neuroglancer precomputed format
+#### alignment with FIJI
 
+A headless fiji script (documented in string format in emprocessing/fiji_script.py) is run between
+pairs of adjacent images.  An alignment transformation is computed by fitting an affine
+transformation using RANSAC over matched SIFT features.  If there is little deformation
+in the transformation, a rigid, translation only transformation is favored.  Once these
+transforms are computed across all adjacent images, the results are combined and a global
+bounding box is computed for the volume.  The images are then written to the "align"
+directory along with the transformation matrix used.  Future work could make this more
+robust by matching every other slice or to find large transformations as a mechanism
+to screen for outliers.  This component also writes out temporary files (one per 2d image),
+which encodes each image as an array of 1024x1024 tiles.
 
+#### writing scale pyramid into neuroglancer precomputed format
 
+The dataset is written to /neuroglancer/jpeg and neuroglancer/raw (optional) using
+neuroglancer's [pre-computed sharded format](https://github.com/google/neuroglancer/blob/master/src/neuroglancer/datasource/precomputed/sharded.md#sharding-specification).  Each "shard" is a separate
+file that encodes several small chunks which can be effienctly retrieved for interactive
+viewing.  The purpose of the "shard" is to have very few files to make copying the dataset
+fast, while still allowinig fast indexing into small chunks when only needing parts
+of the dataset.
 
-
+This component pre-allocates 500 workers that iterate through different
+ "shards" of the dataset of size
+1024x1024x1024.  The pyramid generation is simplified greatly by adjusting the shard
+size for each pyramid so that there is one for each 1024^3, one for each 512^3, etc.
+This allow each worker to be completely independent of all the others.
+1024^3 can be read efficiently from the temporary files computed in the previous step
+by doing a range fetch to retrieve just the relevant 1024x1024 tile.  Note, that
+with this strategy (assuming that 64^3 represents the smallest chunk unit size
+recommended), it is not possible (without orchestrating multiple writers to the same file)
+to have a scale level higher than 4 (where
+0 is maximum resolution) unless an initial shard size over 1024 is used or more sophisticated
+inter-process communication is employed.
 
 
 
