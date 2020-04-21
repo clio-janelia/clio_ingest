@@ -112,18 +112,21 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
                     if (glb_iter % NUM_WORKERS) == worker_id:
                         # call function that writes shard (exception raised for non-200, 300 response)
                         http = HttpHook("POST", http_conn_id="IMG_WRITE")
+                        params = json.dumps({
+                                    "dest": source, # will write to location + /ng/raw or /ng/jpeeg
+                                    "source": temp_location, # location of tiles
+                                    "start": [iterx, itery, iterz],
+                                    "shard-size": SHARD_SIZE,
+                                    "bbox": json.dumps(bbox),
+                                    "minz": minz,
+                                    "maxz": maxz,
+                                    "writeRaw": json.dumps(writeRaw) 
+                            })
+
+                        logging.info(f"http params: {params}") 
                         response = http.run(
                                     "/ngshard",
-                                    json.dumps({
-                                            "dest": source, # will write to location + /ng/raw or /ng/jpeeg
-                                            "source": temp_location, # location of tiles
-                                            "start": [iterx, itery, iterz],
-                                            "shard-size": SHARD_SIZE,
-                                            "bbox": json.dumps(bbox),
-                                            "minz": minz,
-                                            "maxz": maxz,
-                                            "writeRaw": json.dumps(writeRaw) 
-                                    }),
+                                    params,
                                     headers,
                                     {}
                                     )
