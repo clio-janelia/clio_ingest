@@ -112,6 +112,9 @@ for config in configs:
 
     # set to global
     globals()[DAG_NAME] = dag
+   
+    # optional parameter for downsampling data during alignment
+    downsample_factor = config.get("downsample_factor", 1)
 
     def validate_params(**kwargs):
         """Check that img name, google bucket, and image range is specified.
@@ -132,7 +135,9 @@ for config in configs:
             logging.info("Enables raw pyramid creation")
         else:
             logging.info("Disable raw pyramid creation")
-       
+    
+        # log downsample factor
+        logging.info(f"Downsample factor: {downsample_factor}")
 
         # format string for image name
         name = config.get('image')
@@ -166,7 +171,7 @@ for config in configs:
 
 
     align_start_t, align_end_t = align.align_dataset_psubdag(dag, "align", config.get("image"), config.get("minz"),
-        config.get("maxz"), config.get("source"), config.get("project"), "http_requests", TEST_MODE)
+            config.get("maxz"), config.get("source"), config.get("project"), downsample_factor, "http_requests", TEST_MODE)
 
     
     ngingest_start_t, ngingest_end_t = pyramid.export_dataset_psubdag(dag, "ngingest", config.get("image"), config.get("minz"),

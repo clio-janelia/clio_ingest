@@ -29,7 +29,9 @@ import logging
 from emprocess import fiji_script
 from emprocess.cloudrun_operator import CloudRunOperator
 
-def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, pool=None, TEST_MODE=False):
+import numpy as np
+
+def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, downsample_factor, pool=None, TEST_MODE=False):
     """Creates aligntment tasks and communicates a resulting bounding box
     and success based on returned task instance's output.
 
@@ -43,6 +45,7 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, pool
         minz (int): minimum z slice
         maxz (int): maximum z slice
         source (str): location for data (gbucket name)
+        downsample_factor (int): how much downsampling to do for alignment
         pool (str): name of high throughput queue for http requests
         TEST_MODE (boolean): if true disable requests to gbucket
 
@@ -117,19 +120,20 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, pool
             affine = [1, 0, 0, 1, 0, 0]
             translation = [1, 0, 0, 1, 0, 0]
 
-            width = res["width"]
-            height = res["height"]
+            width = res["width"] * downsample_factor
+            height = res["height"] * downsample_factor
 
             def adjust_trans(trans):
                 """Flips Y and moves origin to top left.
                 """
+                trans = np.array(trans)
+                trans *= downsample_factor
                 dx = trans[4] - (1 - trans[0])*width/2 + trans[2]*height/2
                 dy = trans[5] - (1 - trans[3])*height/2 + trans[1]*width/2
                 return [trans[0], -trans[2], -trans[1], trans[3], dx, dy]
 
             affine = adjust_trans(res["affine"])
             translation = adjust_trans(res["translation"])
-
 
             # use translatee coefficients if image rotated less than 0.5 percent
             if affine[2] <= 0.0008:
@@ -242,12 +246,16 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, pool
         provide_context=True,
         dag=dag,
     )   
+    
+    downsample_postfix = ""
+    if downsample_factor > 1:
+        downsample_postfix = f"?downsample={downsample_factor}"
 
     # align each pair of images, find global offsets, write results
     for slice in range(minz, maxz+1):
         if slice < maxz:
-            img1 = "gs://" + source + "/raw/" + image % slice 
-            img2 = "gs://" + source + "/raw/" + image % (slice+1) 
+            img1 = "gs://" + source + "/raw/" + image % slice + downsample_postfix
+            img2 = "gs://" + source + "/raw/" + image % (slice+1) + downsample_postfix 
 
             #compute affine match between two images.
             #note: files are expected in src/raw/*
