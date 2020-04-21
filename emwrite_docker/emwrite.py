@@ -18,6 +18,9 @@ import io
 import traceback
 import threading
 
+# allow very large images to be read (up to 1 gigavoxel)
+Image.MAX_IMAGE_PIXELS = 1000000000
+
 app = Flask(__name__)
 
 # TODO: Limit origin list here: CORS(app, origins=[...])
