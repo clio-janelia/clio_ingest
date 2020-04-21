@@ -220,7 +220,7 @@ def ngshard():
         # put in fortran order
         vol3d = vol3d.transpose((2,1,0))
 
-        for level in range(num_levels):
+        def _write_shard(level, start, vol3d, format):
             # get spec for jpeg and post
             dataset = ts.open({
                 'driver': 'neuroglancer_precomputed',
@@ -228,10 +228,10 @@ def ngshard():
                     'driver': 'gcs',
                     'bucket': bucket_name,
                     },
-                'path': 'neuroglancer/jpeg',
+                'path': f"neuroglancer/{format}",
                 'context': {
                     'cache_pool': {
-                        'total_bytes_limit': 100_000_000
+                        'total_bytes_limit': 500_000_000
                     }
                 },
                 'recheck_cached_data': 'open',
@@ -241,26 +241,26 @@ def ngshard():
             size = vol3d.shape
             dataset = dataset[ts.d['channel'][0]]
             dataset[ start[0]:(start[0]+size[0]), start[1]:(start[1]+size[1]), start[2]:(start[2]+size[2]) ] = vol3d 
-            if write_raw:
-                # get spec for raw and post
-                dataset = ts.open({
-                    'driver': 'neuroglancer_precomputed',
-                    'kvstore': {
-                        'driver': 'gcs',
-                        'bucket': bucket_name,
-                        },
-                    'path': 'neuroglancer/raw',
-                    'context': {
-                        'cache_pool': {
-                            'total_bytes_limit': 100_000_000
-                        }
-                    },
-                    'recheck_cached_data': 'open',
-                    'scale_index': level
-                }).result()
+        for level in range(num_levels):
+            if level == 0:
+                # iterate through different 512 cubes since 1024 will not fit in memory
+                for iterz in range(0, 1024, 512):
+                    for itery in range(0, 1024, 512):
+                        for iterx in range(0, 1024, 512):
+                            vol3d_temp = vol3d[iterx:(iterx+512), itery:(itery+512), iterz:(iterz+512)]
+                            currsize = vol3d_temp.shape
+                            if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
+                                continue
+                            start_temp = (start[0]+iterx, start[1]+itery, start[2]+iterz) 
 
-                dataset = dataset[ts.d['channel'][0]]
-                dataset[ start[0]:(start[0]+size[0]), start[1]:(start[1]+size[1]), start[2]:(start[2]+size[2]) ] = vol3d 
+                            _write_shard(level, start_temp, vol3d_temp, "jpeg")
+                            if write_raw:
+                                _write_shard(level, start_temp, vol3d_temp, "raw")
+                                        
+            else:
+                _write_shard(level, start, vol3d, "jpeg")
+                if write_raw:
+                    _write_shard(level, start, vol3d, "raw")
 
             # downsample
             start = (start[0]//2, start[1]//2, start[2]//2)
@@ -302,10 +302,10 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
              "sharding" : {
                 "@type" : "neuroglancer_uint64_sharded_v1",
                 "hash" : "identity",
-                "minishard_bits" : 3,
+                "minishard_bits" : 0,
                 "minishard_index_encoding" : "gzip",
                 "preshift_bits" : 9,
-                "shard_bits" : 18
+                "shard_bits" : 24
              },
              "size" : [ width, height, (maxz+1) ],
              "realsize" : [ width, height, (maxz-minz+1) ],
@@ -325,7 +325,7 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 "minishard_bits" : 0,
                 "minishard_index_encoding" : "gzip",
                 "preshift_bits" : 9,
-                "shard_bits" : 18
+                "shard_bits" : 21
              },
              "size" : [ width//2, height//2, (maxz+1)//2 ],
              "realsize" : [ width//2, height//2, (maxz-minz+1)//2 ],
@@ -345,7 +345,7 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 "minishard_bits" : 0,
                 "minishard_index_encoding" : "gzip",
                 "preshift_bits" : 6,
-                "shard_bits" : 18
+                "shard_bits" : 21
              },
              "size" : [ width//4, height//4, (maxz+1)//4 ],
              "realsize" : [ width//4, height//4, (maxz-minz+1)//4 ],
@@ -362,6 +362,14 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
              "size" : [ width//8, height//8, (maxz+1)//8 ],
              "realsize" : [ width//8, height//8, (maxz-minz+1)//8 ],
              "offset" : [0, 0, 0],
+            "sharding" : {
+                "@type" : "neuroglancer_uint64_sharded_v1",
+                "hash" : "identity",
+                "minishard_bits" : 0,
+                "minishard_index_encoding" : "gzip",
+                "preshift_bits" : 3,
+                "shard_bits" : 21
+             },
              "realoffset" : [0, 0, minz//8]
           },
           {
@@ -374,6 +382,14 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
              "size" : [ width//16, height//16, (maxz+1)//16 ],
              "realsize" : [ width//16, height//16, (maxz-minz+1)//16 ],
              "offset" : [0, 0, 0],
+             "sharding" : {
+                "@type" : "neuroglancer_uint64_sharded_v1",
+                "hash" : "identity",
+                "minishard_bits" : 0,
+                "minishard_index_encoding" : "gzip",
+                "preshift_bits" : 0,
+                "shard_bits" : 21
+             },
              "realoffset" : [0, 0, minz//16]
           }
        ],
