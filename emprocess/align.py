@@ -126,8 +126,11 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, down
             def adjust_trans(trans):
                 """Flips Y and moves origin to top left.
                 """
-                trans = np.array(trans)
-                trans *= downsample_factor
+                #trans = np.array(trans)
+                #trans *= downsample_factor
+                
+                trans[4]*=downsample_factor
+                trans[5]*=downsample_factor
                 dx = trans[4] - (1 - trans[0])*width/2 + trans[2]*height/2
                 dy = trans[5] - (1 - trans[3])*height/2 + trans[1]*width/2
                 return [trans[0], -trans[2], -trans[1], trans[3], dx, dy]
@@ -264,7 +267,7 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, down
                 http_conn_id="ALIGN_CLOUD_RUN",
                 endpoint="",
                 data=json.dumps({
-                        "command": "-Xmx4g -XX:+UseCompressedOops -Dpre=\"img1.png\" -Dpost=\"img2.png\" -- --headless \"fiji_align.bsh\"",
+                        "command": "-Xmx2g -XX:+UseCompressedOops -Dpre=\"img1.png\" -Dpost=\"img2.png\" -- --headless \"fiji_align.bsh\"",
                     "input-map": {
                             "img1.png": img1,
                             "img2.png": img2 
