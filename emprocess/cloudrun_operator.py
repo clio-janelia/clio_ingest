@@ -12,6 +12,7 @@ from airflow import AirflowException
 import subprocess
 import json
 import time
+import threading
 
 class CloudRunOperator(SimpleHttpOperator):
     @apply_defaults
@@ -57,6 +58,8 @@ class CloudRunBatchOperator(BaseOperator):
         log_response = False,
         num_http_tries = 1, # int
         xcom_push = False,
+        num_threads=8, # default threading for low-compute jobs
+        validate_output=None, # callable with response as parameter
         *args,
         **kwargs
     ):
@@ -74,6 +77,8 @@ class CloudRunBatchOperator(BaseOperator):
         self.log_response = log_response
         self.xcom_push_flag = xcom_push
         self.num_http_tries = num_http_tries
+        self.num_threads = num_threads
+        self.validate_output = validate_output
 
     def execute(self, context):
         # generate mini tasks
@@ -91,37 +96,65 @@ class CloudRunBatchOperator(BaseOperator):
                 pass
 
         results = {}
-        for [id, task] in mini_tasks:
-            params = json.dumps(task)
-            self.log.info(f"http params: {params}") 
+        failure = None
+        def run_query(thread_id):
+            nonlocal failure
+            for idx, [id, task] in enumerate(mini_tasks):
+                if failure is not None:
+                    break # exit thread if a failure is detected
+                if (idx % self.num_threads) == thread_id:
+                    params = json.dumps(task)
+                    self.log.info(f"http params {id}: {params}") 
 
-            http = HttpHook("POST", http_conn_id=self.conn_id)
-            
-            # enable unconditional retries at mini task level
-            # to avoid problems with the whole batch crashing
-            num_tries = 0
-            success = False
-            while not success and num_tries < self.num_http_tries:
-                num_tries += 1
-                success = True
-                try:
-                    response = http.run(
-                                self.endpoint,
-                                params,
-                                self.headers,
-                                {}
-                                )
-                except AirflowException as e:
-                    if num_tries >= self.num_http_tries:
-                        raise # already at error limit
-                    self.log.error("http failure: " + str(e))
-                    time.sleep(60) # wait a minute to try again
+                    http = HttpHook("POST", http_conn_id=self.conn_id)
+                    
+                    # enable unconditional retries at mini task level
+                    # to avoid problems with the whole batch crashing
+                    num_tries = 0
                     success = False
+                    while not success and num_tries < self.num_http_tries:
+                        num_tries += 1
+                        success = True
+                        try:
+                            response = http.run(
+                                        self.endpoint,
+                                        params,
+                                        self.headers,
+                                        {}
+                                        )
+                        except AirflowException as e:
+                            if num_tries >= self.num_http_tries:
+                                self.log.error(f"http final failure {id}: " + str(e))
+                                failure = e
+                                break
+                            self.log.error(f"http failure {id}: " + str(e))
+                            time.sleep(120) # wait a minute to try again
+                            success = False
+                        except Exception as e:
+                            failure = e
+                            break
 
-            if self.log_response:
-                self.log.info(response.text) 
-            if self.xcom_push_flag:
-                results[id] = response.text
+                    if self.log_response:
+                        self.log.info(response.text) 
+
+                    # check if output is validate
+                    if self.validate_output is not None:
+                        if not self.validate_output(response):
+                            failure = AirflowException(f"output test failed {id}")
+                            break
+
+                    if self.xcom_push_flag:
+                        results[id] = response.text
+
+        threads = [threading.Thread(target=run_query, args=[thread_id]) for thread_id in range(self.num_threads)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        
+        # raise error if one of the threads failed
+        if failure is not None:
+            raise failure
 
         if self.xcom_push_flag:
             return results

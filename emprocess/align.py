@@ -261,7 +261,18 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         provide_context=True,
         dag=dag,
     )   
-    
+   
+    def validate_output(response):
+        """Make sure output from FIJI is parseable.
+        """
+        try:
+            if len(response.text) == 0:
+                return False
+            parsed_json = json.loads(response.text)
+        except Exception as e:
+            return False
+        return True
+
     # task callable that generates batch assignment to align slices for the provided worker
     def align_worker(worker_id, num_workers, data, **context):
         downsample_factor = int(data["downsample_factor"])
@@ -344,6 +355,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             log_response=True,
             num_http_tries=2,
             xcom_push=True,
+            validate_output=validate_output,
             pool=pool,
             dag=dag,
         )
