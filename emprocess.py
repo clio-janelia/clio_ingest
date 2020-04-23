@@ -41,7 +41,7 @@ Airflow Variables:
 
 
 # large http requests are grouped into pool
-WORKER_POOLS = [512, 256, 128, 64, 4, 1]
+WORKER_POOLS = [128, 64, 4, 1]
 
 from airflow.models import DAG
 from airflow.operators.python_operator import PythonOperator, BranchPythonOperator, ShortCircuitOperator

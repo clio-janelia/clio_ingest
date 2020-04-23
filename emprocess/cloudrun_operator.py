@@ -11,6 +11,7 @@ from airflow.hooks.http_hook import HttpHook
 from airflow import AirflowException
 import subprocess
 import json
+import time
 
 class CloudRunOperator(SimpleHttpOperator):
     @apply_defaults
@@ -114,6 +115,7 @@ class CloudRunBatchOperator(BaseOperator):
                     if num_tries >= self.num_http_tries:
                         raise # already at error limit
                     self.log.error("http failure: " + str(e))
+                    time.sleep(60) # wait a minute to try again
                     success = False
 
             if self.log_response:
