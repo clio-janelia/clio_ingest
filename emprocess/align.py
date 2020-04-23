@@ -27,11 +27,11 @@ from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 import json
 import logging
 from emprocess import fiji_script
-from emprocess.cloudrun_operator import CloudRunOperator
+from emprocess.cloudrun_operator import CloudRunOperator, CloudRunBatchOperator
 
 import numpy as np
 
-def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, downsample_factor, pool=None, TEST_MODE=False):
+def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SHARD_SIZE=1024):
     """Creates aligntment tasks and communicates a resulting bounding box
     and success based on returned task instance's output.
 
@@ -39,21 +39,16 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, down
         ending dag task returns extents under the key "bbox" if it succeeds.
 
     Args:
-        dag (Airflow DAG): parent dag
         name (str): dag_id.name is the prefix for all tasks
-        image (str): image name
-        minz (int): minimum z slice
-        maxz (int): maximum z slice
-        source (str): location for data (gbucket name)
-        downsample_factor (int): how much downsampling to do for alignment
+        NUM_WORKERS (int): number of workers that will process all of the mini tasks
         pool (str): name of high throughput queue for http requests
         TEST_MODE (boolean): if true disable requests to gbucket
+        SHARD_SIZE (int): chunk size used for saving data
 
     Returns:
         (starting dag task, ending dag task)
 
     """
-    SHARD_SIZE = Variable.get('SHARD_SIZE', 1024) 
   
     # starting task (check for the existence of the raw/*.png data
     def check_data(**context):
@@ -64,6 +59,11 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, down
         if TEST_MODE:
             return
 
+        source = context["dag_run"].conf.get("source")
+        image = context["dag_run"].conf.get("image")
+        minz = context["dag_run"].conf.get("minz")
+        maxz = context["dag_run"].conf.get("maxz")
+
         # grab all files in raw
         ghook = GoogleCloudStorageHook() # uses default gcp connection
         file_names = ghook.list(source, prefix="raw/")
@@ -73,10 +73,10 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, down
             if ("raw/" + (image % slice)) not in file_names:  
                 raise AirflowException("raw data not loaded properly")
 
-
     # find global coordinate system and write transforms
     start_t = PythonOperator(
-        task_id=f"{dag.dag_id}.{name}.start_align",
+        task_id=f"{name}.start_align",
+        provide_context=True,
         python_callable=check_data,
         dag=dag,
     )   
@@ -102,6 +102,13 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, down
         Note: the computation is very straighforward matrix multiplication.  No
         need to use a docker image.
         """
+        
+        source = context["dag_run"].conf.get("source")
+        image = context["dag_run"].conf.get("image")
+        minz = context["dag_run"].conf.get("minz")
+        maxz = context["dag_run"].conf.get("maxz")
+        downsample_factor = context["dag_run"].conf.get("downsample_factor", 1)
+        project_id = context["dag_run"].conf.get("project_id")
 
         def calculate_transform(x, y, affine):
             """Apply transform to a point.
@@ -151,10 +158,16 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, down
         # store current bbox x range and y range and find max
         bbox = None
         global_bbox = None
+    
+        all_results = {}
+        for worker_id in range(0, NUM_WORKERS):
+            res = context['task_instance'].xcom_pull(task_ids=f"{name}.affine_{worker_id}")
+            all_results.update(res)
+
         for slice in range(minz, maxz):
-            res = json.loads(context['task_instance'].xcom_pull(task_ids=f"{dag.dag_id}.{name}.affine_{slice}"))
+            res = json.loads(all_results[str(slice)])
             # affine has already been modified to treat top-left of image as origin
-            
+
             # process results
             curr_affine, bbox = process_results(res)
             
@@ -205,7 +218,6 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, down
             context['task_instance'].xcom_push(key=f"{slice}", value=curr_affine)
             affines_csv += f"{slice} , '{curr_affine}'\n"
 
-        logging.info(affines_csv)
         logging.info([global_bbox[1]-global_bbox[0], global_bbox[3]-global_bbox[2]])
         # push bbox for new image size
         context['task_instance'].xcom_push(key="bbox", value=[global_bbox[1]-global_bbox[0], global_bbox[3]-global_bbox[2]])
@@ -227,12 +239,12 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, down
                     raise
 
     # find global coordinate system and write transforms
-    collect_id = f"{dag.dag_id}.{name}.collect"
+    collect_id = f"{name}.collect"
     collect_t = PythonOperator(
         task_id=collect_id,
         python_callable=collect_affine,
         provide_context=True,
-        op_kwargs={'temp_location': f"{source}_" + "{{ ds_nodash }}"},
+        op_kwargs={'temp_location': "{{ dag_run.conf['source'] }}" + "_" + "{{ ds_nodash }}"},
         dag=dag,
     )
  
@@ -244,65 +256,123 @@ def align_dataset_psubdag(dag, name, image, minz, maxz, source, project_id, down
 
     # find global coordinate system and write transforms
     finish_t = PythonOperator(
-        task_id=f"{dag.dag_id}.{name}.finish_align",
+        task_id=f"{name}.finish_align",
         python_callable=finish_align,
         provide_context=True,
         dag=dag,
     )   
     
-    downsample_postfix = ""
-    if downsample_factor > 1:
-        downsample_postfix = f"?downsample={downsample_factor}"
-
-    # align each pair of images, find global offsets, write results
-    for slice in range(minz, maxz+1):
-        if slice < maxz:
-            img1 = "gs://" + source + "/raw/" + image % slice + downsample_postfix
-            img2 = "gs://" + source + "/raw/" + image % (slice+1) + downsample_postfix 
-
-            #compute affine match between two images.
-            #note: files are expected in src/raw/*
-            affine_t = CloudRunOperator(
-                task_id=f"{dag.dag_id}.{name}.affine_{slice}",
-                http_conn_id="ALIGN_CLOUD_RUN",
-                endpoint="",
-                data=json.dumps({
-                        "command": "-Xmx2g -XX:+UseCompressedOops -Dpre=\"img1.png\" -Dpost=\"img2.png\" -- --headless \"fiji_align.bsh\"",
-                    "input-map": {
-                            "img1.png": img1,
-                            "img2.png": img2 
-                    },
-                    "input-str": {
-                            "fiji_align.bsh": fiji_script.SCRIPT
-                    }
-                }),
-                xcom_push=True, # push affine results to next task
-                headers={"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"},
-                pool=pool,
-                dag=dag
-            )
-            start_t >> affine_t >> collect_t
+    # task callable that generates batch assignment to align slices for the provided worker
+    def align_worker(worker_id, num_workers, data, **context):
+        downsample_factor = int(data["downsample_factor"])
+        minz = int(data["minz"])
+        maxz = int(data["maxz"])
+        source = data["source"]
+        image = data["image"]
         
-        transform_val = f"{{{{ task_instance.xcom_pull(task_ids='{collect_id}', key='{slice}') }}}}"
-        bbox_val = f"{{{{ task_instance.xcom_pull(task_ids='{collect_id}', key='bbox') }}}}"
-        # write collected transforms back to google bucket (including temporary tile data)
-        write_aligned_image_t = CloudRunOperator(
-            task_id=f"{dag.dag_id}.{name}.write_{slice}",
-            http_conn_id="IMG_WRITE",
-            endpoint="/alignedslice",
-            data=json.dumps({
-                    "img": image % slice,
-                    "transform": transform_val, 
-                    "bbox": bbox_val, 
-                    "dest-tmp": source + "_" + "{{ ds_nodash }}",
-                    "slice": slice,
-                    "shard-size": SHARD_SIZE,
-                    "dest": source
-            }),
-            headers={"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"},
+        downsample_postfix = ""
+        if downsample_factor > 1:
+            downsample_postfix = f"?downsample={downsample_factor}"
+
+        task_list = []
+        for slice in range(minz, maxz):
+            if (slice % num_workers) == worker_id:
+                img1 = "gs://" + source + "/raw/" + image % slice + downsample_postfix
+                img2 = "gs://" + source + "/raw/" + image % (slice+1) + downsample_postfix 
+                params = {
+                            "command": "-Xmx2g -XX:+UseCompressedOops -Dpre=\"img1.png\" -Dpost=\"img2.png\" -- --headless \"fiji_align.bsh\"",
+                        "input-map": {
+                                "img1.png": img1,
+                                "img2.png": img2 
+                        },
+                        "input-str": {
+                                "fiji_align.bsh": fiji_script.SCRIPT
+                        }
+                }
+                task_list.append([slice, params])
+        return task_list
+
+
+    # task callable that generates batch assignment to write image data for the provided worker
+    def writeslice_worker(worker_id, num_workers, data, **context):
+        minz = int(data["minz"])
+        maxz = int(data["maxz"])
+        dest = data["dest"]
+        image = data["image"]
+        collect_id = data["collect_id"]
+        dest_tmp = data["dest-tmp"]
+        shard_size = data["shard-size"]
+        
+        task_list = []
+        for slice in range(minz, maxz+1):
+            if (slice % num_workers) == worker_id:
+                transform_val = json.dumps(context["task_instance"].xcom_pull(task_ids=collect_id, key=str(slice)))
+                bbox_val = json.dumps(context["task_instance"].xcom_pull(task_ids=collect_id, key="bbox"))
+        
+                params = {
+                        "img": image % slice,
+                        "transform": transform_val, 
+                        "bbox": bbox_val, 
+                        "dest-tmp": dest_tmp,
+                        "slice": slice,
+                        "shard-size": shard_size,
+                        "dest": dest
+                }        
+                task_list.append([slice, params])
+        return task_list
+
+
+    # generate worker pool for affine alignment and for writing results
+    # align each pair of images, find global offsets, write results
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"}
+    for worker_id in range(NUM_WORKERS):
+        affine_t = CloudRunBatchOperator(
+            task_id=f"{name}.affine_{worker_id}",
+            gen_callable=align_worker,
+            worker_id=worker_id,
+            num_workers=NUM_WORKERS,
+            data={
+                    "source": "{{ dag_run.conf['source'] }}",
+                    "minz": "{{ dag_run.conf['minz'] }}",
+                    "maxz": "{{ dag_run.conf['maxz'] }}",
+                    "image": "{{ dag_run.conf['image'] }}",
+                    "downsample_factor": "{{ dag_run.conf.get('downsample_factor', 1) }}"
+            },
+            conn_id="ALIGN_CLOUD_RUN",
+            endpoint="",
+            headers=headers,
+            log_response=True,
+            num_http_tries=2,
+            xcom_push=True,
             pool=pool,
-            dag=dag
+            dag=dag,
         )
+
+        start_t >> affine_t >> collect_t
+
+        write_aligned_image_t = CloudRunBatchOperator(
+            task_id=f"{name}.write_{worker_id}",
+            gen_callable=writeslice_worker,
+            worker_id=worker_id,
+            num_workers=NUM_WORKERS,
+            data={
+                    "dest": "{{ dag_run.conf['source'] }}",
+                    "minz": "{{ dag_run.conf['minz'] }}",
+                    "maxz": "{{ dag_run.conf['maxz'] }}",
+                    "image": "{{ dag_run.conf['image'] }}",
+                    "dest-tmp": "{{ dag_run.conf['source'] }}" + "_" + "{{ ds_nodash }}",
+                    "shard-size": SHARD_SIZE,
+                    "collect_id": collect_id
+            },
+            conn_id="IMG_WRITE",
+            endpoint="/alignedslice",
+            headers=headers,
+            log_response=False,
+            num_http_tries=2,
+            xcom_push=False,
+            pool=pool,
+            dag=dag,
+        )       
         collect_t >> write_aligned_image_t >> finish_t
 
     # provide bookend tasks to caller

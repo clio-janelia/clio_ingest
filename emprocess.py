@@ -6,6 +6,12 @@ Command line json:
 {
     email: foo@bar # where to send results
     createRawPyramid: True # create raw scale pyramid in addition to jpeg (True is default)
+    image: "template%d.png", # template name
+    minz: 0, # first slice
+    maxz: 50, # last slice
+    source: bucket_name # location of stored pngs
+    downsample_factor: 4 # how much to downsample before aligning
+    "id": "name of dataset"
 }
 
 Input: images in a source/raw/*.png
@@ -14,8 +20,8 @@ Environment: If testing locally without data, set AIRFLOW_TEST_MODE=1
 
 Airflow Configuration:
 
-Setup a pool with 500 workers for lightweight http requests
-called "http_requests".
+Setup a pool with  workers for lightweight http requests
+called "http_requests" to be equal to the WORKER_POOL.
 
 Setup a default email for airflow notifications
 
@@ -28,20 +34,14 @@ Conn id:
 
 Airflow Variables:
 
-* SHARD_SIZE (optional): default 1024
-
-* Append configs for each run type to variable "em_processing_configs":
-
-    [{
-    image: "template%d.png", # template name
-    minz: 0, # first slice
-    maxz: 50, # last slice
-    source: bucket_name # location of stored pngs
-    }
-    ]
-
+    Ideally set "emprocess_version" to be the current version to make sure 
+    old dag versions are not run.
 
 """
+
+
+# large http requests are grouped into pool
+WORKER_POOLS = [512, 256, 128, 64, 4, 1]
 
 from airflow.models import DAG
 from airflow.operators.python_operator import PythonOperator, BranchPythonOperator, ShortCircuitOperator
@@ -80,19 +80,18 @@ Both minor and major version changes will reseult in a new DAG workflow.
 The initial operator should attempt to print out any necessary provenance
 so that it is in the log (such as command line options).  Somehow provide
 some version information for dependencies (preferably automatically).
+
+The old dags can be cached (though shouldn't be run) by Airflow.
 """
 
 VERSION = "0.1"
 SUBVERSION = "1"
-SHARD_SIZE = Variable.get('SHARD_SIZE', 1024) 
-START_DATE = datetime(2020, 4, 4)
+SHARD_SIZE = 1024 
+START_DATE = datetime(2020, 4, 21) # date when these workflows became relevant (mostly legacy for scheduling work)
 
-# dynamically create DAGs for em_procesing based on configs
-configs = Variable.get('em_processing_configs', default_var=[], deserialize_json=True)
+for WORKER_POOL in WORKER_POOLS:
 
-for config in configs:
-
-    DAG_NAME = f'em_processing_{config.get("id")}_{VERSION}'
+    DAG_NAME = f'emprocess_width{WORKER_POOL}_v{VERSION}'
 
     # each dagrun is executed once and at time of submission
     DEFAULT_ARGS = {
@@ -113,15 +112,19 @@ for config in configs:
     # set to global
     globals()[DAG_NAME] = dag
    
-    # optional parameter for downsampling data during alignment
-    downsample_factor = config.get("downsample_factor", 1)
-
     def validate_params(**kwargs):
         """Check that img name, google bucket, and image range is specified.
         """
 
         logging.info(f"Version({VERSION}) Sub-version({SUBVERSION})")
         logging.info(f"Chunk size: {SHARD_SIZE})")
+
+        # check if runtime version matches what is in airflow (this is a relevant
+        # check if caching is enabled and old workflow are around but no longer supported in source).
+        # (might be unnecessary)
+        version = Variable.get("emprocess_version", VERSION)
+        if version != VERSION:
+            raise AirflowException("executing emprocess version {version} is not supported")
 
         # check if email is provided
         email_addr = kwargs['dag_run'].conf.get('email')
@@ -137,19 +140,20 @@ for config in configs:
             logging.info("Disable raw pyramid creation")
     
         # log downsample factor
+        downsample_factor = kwargs['dag_run'].conf.get('downsample_factor', 1)
         logging.info(f"Downsample factor: {downsample_factor}")
 
         # format string for image name
-        name = config.get('image')
+        name = kwargs['dag_run'].conf.get('image')
         if name is None:
             raise AirflowException("no image exists")
 
         # check for [minz, maxz] values
-        minz = config.get('minz')
+        minz = kwargs['dag_run'].conf.get('minz')
         if minz is None:
             raise AirflowException("no minz exists")
 
-        maxz = config.get('maxz')
+        maxz = kwargs['dag_run'].conf.get('maxz')
         if maxz is None:
             raise AirflowException("no maxz exists")
 
@@ -157,7 +161,7 @@ for config in configs:
             raise AirflowException("no maxz should be greater than minz")
 
         # location of storage (i.e., storage bucket name)
-        location = config.get('source')
+        location = kwargs['dag_run'].conf.get('source')
         if location is None:
             raise AirflowException("no location exists")
         
@@ -170,12 +174,14 @@ for config in configs:
             )
 
 
-    align_start_t, align_end_t = align.align_dataset_psubdag(dag, "align", config.get("image"), config.get("minz"),
-            config.get("maxz"), config.get("source"), config.get("project"), downsample_factor, "http_requests", TEST_MODE)
+    # expects dag run configruation with "image", "minz", "maxz", "source", "project", and "downsample_factor"
+    align_start_t, align_end_t = align.align_dataset_psubdag(dag, DAG_NAME+".align", WORKER_POOL,
+            "http_requests", TEST_MODE, SHARD_SIZE)
 
     
-    ngingest_start_t, ngingest_end_t = pyramid.export_dataset_psubdag(dag, "ngingest", config.get("image"), config.get("minz"),
-        config.get("maxz"), config.get("source"), align_end_t.task_id, "http_requests", TEST_MODE)
+    # expects dag run configruation with "image", "minz", "maxz", "source"
+    ngingest_start_t, ngingest_end_t = pyramid.export_dataset_psubdag(dag, DAG_NAME+".ngingest", WORKER_POOL,
+            align_end_t.task_id, "http_requests", TEST_MODE, SHARD_SIZE)
 
     # pull xcom from a subdag to see if data was written
     def iswritten(**context):
@@ -208,7 +214,7 @@ for config in configs:
                         }
     commands = f"echo '{json.dumps(lifecycle_config)}' > life.json;\n"
     if not TEST_MODE:
-        commands += f"gsutil lifecycle set life.json gs://{config.get('source')}_" + "{{ ds_nodash }};\n"
+        commands += "gsutil lifecycle set life.json gs://{{ dag_run.conf['source'] }}_" + "{{ ds_nodash }};\n"
     commands += "rm life.json;"
 
     cleanup_t = BashOperator(
@@ -222,7 +228,7 @@ for config in configs:
             task_id="notify",
             to="{{ dag_run.conf['email'] }}",
             subject=f"airflow:{DAG_NAME}",
-            html_content=f"job finished.  view at {config['source']}",
+            html_content="Job finished.  View on neuroglancer (source = precomputed://gs://{{ dag_run.conf['source'] }}/neuroglancer/jpeg)",
             dag=dag
     )
 

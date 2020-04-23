@@ -119,8 +119,8 @@ def ngmeta():
     try:
         config_file  = request.get_json()
         bucket_name = config_file["dest"] # contains source and destination
-        minz  = config_file["minz"]
-        maxz  = config_file["maxz"]
+        minz  = int(config_file["minz"])
+        maxz  = int(config_file["maxz"])
         [width, height]  = json.loads(config_file["bbox"])
         shard_size  = config_file["shard-size"] 
         if shard_size != 1024:

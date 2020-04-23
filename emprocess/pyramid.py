@@ -27,48 +27,35 @@ from airflow.operators.python_operator import PythonOperator
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 from airflow.hooks.http_hook import HttpHook
-from emprocess.cloudrun_operator import CloudRunOperator
+from emprocess.cloudrun_operator import CloudRunOperator, CloudRunBatchOperator
 
 import json
 import logging
 
-def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, pool=None, TEST_MODE=False):
+def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST_MODE=False, SHARD_SIZE=1024):
     """Creates ingsetion tasks for creating neuroglancer precomputed volumees.
 
     Args:
-        dag (Airflow DAG): parent dag
         name (str): dag_id.name is the prefix for all tasks
-        image (str): image name
-        minz (int): minimum z slice
-        maxz (int): maximum z slice
-        source (str): location for data (gbucket name)
+        NUM_WORKERS (int): number of workers that will process all of the mini tasks
         bbox_task_id (str): task id for task containing bbox information for the images
         pool (str): name of high throughput queue for http requests
         TEST_MODE (boolean): if true disable requests to gbucket
-
+        SHARD_SIZE (int): chunk size used for saving data
     Returns:
         (starting dag task, ending dag task)
 
     """
-    SHARD_SIZE = Variable.get('SHARD_SIZE', 1024) 
-    NUM_WORKERS = 500 # should have decent parallelism on cloud run
-        
-    # when testing only use 10 workers
-    if TEST_MODE:
-        NUM_WORKERS = 10
     
-    # do not need more workers than slices
-    NUM_WORKERS = min(NUM_WORKERS, maxz-minz+1)
-
     # write meta data for location/ng/jpeg and location/ng/raw
     create_ngmeta_t = CloudRunOperator(
-        task_id=f"{dag.dag_id}.{name}.write_ngmeta",
+        task_id=f"{name}.write_ngmeta",
         http_conn_id="IMG_WRITE",
         endpoint="/ngmeta",
         data=json.dumps({
-                "dest": source,
-                "minz": minz,
-                "maxz": maxz,
+                "dest": "{{ dag_run.conf['source'] }}",
+                "minz": "{{ dag_run.conf['minz'] }}",
+                "maxz": "{{ dag_run.conf['maxz'] }}",
                 "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
                 "shard-size": SHARD_SIZE,
                 "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}"
@@ -79,70 +66,68 @@ def export_dataset_psubdag(dag, name, image, minz, maxz, source, bbox_task_id, p
 
     # create a pool of workers that iterate through any write
     # tasks determined by the bbox
-    def write_ng_shards(temp_location, bbox, writeRaw, worker_id):
+    def write_ng_shards(worker_id, num_workers, data, **context):
         """Write shards by invoking several http requests based on bbox and worker id.
         """
-        bbox = json.loads(bbox)
-        writeRaw = json.loads(writeRaw.lower())
+        bbox = json.loads(data["bbox"])
+        writeRaw = json.loads(data["writeRaw"].lower())
 
         def extract_range(pt1, pt2):
             start = pt1 // SHARD_SIZE
             finish = pt2 // SHARD_SIZE
             return start, finish
 
-        zstart, zfinish = extract_range(minz, maxz)
+        zstart, zfinish = extract_range(int(data["minz"]), int(data["maxz"]))
         ystart, yfinish = extract_range(0, bbox[1]-1)
         xstart, xfinish = extract_range(0, bbox[0]-1)
         
         glb_iter = 0
-
-        # get auth
-        headers = {"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"}
-        try:
-            import subprocess
-            token = subprocess.check_output(["gcloud auth print-identity-token"], shell=True).decode()
-            headers["Authorization"] = f"Bearer {token[:-1]}"
-        except Exception:
-            pass
-
+        task_list = []
         for iterz in range(zstart, zfinish+1):
             for itery in range(ystart, yfinish+1):
                 for iterx in range(xstart, xstart+1):
-                    glb_iter += 1
-                    if (glb_iter % NUM_WORKERS) == worker_id:
-                        # call function that writes shard (exception raised for non-200, 300 response)
-                        http = HttpHook("POST", http_conn_id="IMG_WRITE")
-                        params = json.dumps({
-                                    "dest": source, # will write to location + /ng/raw or /ng/jpeeg
-                                    "source": temp_location, # location of tiles
+                    if (glb_iter % num_workers) == worker_id:
+                        params = {
+                                    "dest": data["source"], # will write to location + /ng/raw or /ng/jpeeg
+                                    "source": data["temp_location"], # location of tiles
                                     "start": [iterx, itery, iterz],
-                                    "shard-size": SHARD_SIZE,
-                                    "bbox": json.dumps(bbox),
-                                    "minz": minz,
-                                    "maxz": maxz,
-                                    "writeRaw": json.dumps(writeRaw) 
-                            })
+                                    "shard-size": data["shard-size"],
+                                    "bbox": data["bbox"],
+                                    "minz": int(data["minz"]),
+                                    "maxz": int(data["maxz"]),
+                                    "writeRaw": data["writeRaw"] 
+                            }
+                        task_list.append([glb_iter, params])
+                    glb_iter += 1
 
-                        logging.info(f"http params: {params}") 
-                        response = http.run(
-                                    "/ngshard",
-                                    params,
-                                    headers,
-                                    {}
-                                    )
+        return task_list
 
-    finish_t = DummyOperator(task_id=f"{dag.dag_id}.{name}.finish_ngwrite", dag=dag)
+    finish_t = DummyOperator(task_id=f"{name}.finish_ngwrite", dag=dag)
 
+    
+
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"}
     for worker_id in range(NUM_WORKERS):
-        write_shards_t = PythonOperator(
-            task_id=f"{dag.dag_id}.{name}.write_ng_shards_{worker_id}",
-            python_callable=write_ng_shards,
-            op_kwargs={
-                    "temp_location": f"{source}_" + "{{ ds_nodash }}",
+        write_shards_t = CloudRunBatchOperator(
+            task_id=f"{name}.write_ng_shards_{worker_id}",
+            gen_callable=write_ng_shards,
+            worker_id=worker_id,
+            num_workers=NUM_WORKERS,
+            data={
+                    "source": "{{ dag_run.conf['source'] }}",
+                    "temp_location": f"{{{{ dag_run.conf['source'] }}}}_" + "{{ ds_nodash }}",
+                    "minz": "{{ dag_run.conf['minz'] }}",
+                    "maxz": "{{ dag_run.conf['maxz'] }}",
                     "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
                     "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}",
-                    "worker_id": worker_id
+                    "shard-size": SHARD_SIZE
             },
+            conn_id="IMG_WRITE",
+            endpoint="/ngshard",
+            headers=headers,
+            log_response=False,
+            num_http_tries=1, # no sense retrying here
+            xcom_push=False,
             pool=pool,
             dag=dag,
         )
