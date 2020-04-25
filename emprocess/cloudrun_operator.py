@@ -13,6 +13,7 @@ import subprocess
 import json
 import time
 import threading
+import random
 
 class CloudRunOperator(SimpleHttpOperator):
     @apply_defaults
@@ -95,10 +96,23 @@ class CloudRunBatchOperator(BaseOperator):
             except Exception:
                 pass
 
+        # start randomly
+        delay = random.randint(0, self.num_workers * 2)
+        time.sleep(delay)
+
         results = {}
         failure = None
         def run_query(thread_id):
             nonlocal failure
+
+            factor = 1
+            spot = thread_id
+            while spot > 0:
+                time.sleep(30)
+
+                factor *= 2
+                spot -= factor
+
             for idx, [id, task] in enumerate(mini_tasks):
                 if failure is not None:
                     break # exit thread if a failure is detected
@@ -122,6 +136,7 @@ class CloudRunBatchOperator(BaseOperator):
                                         self.headers,
                                         {}
                                         )
+                            self.log.info(f"completed call {id}") 
                         except AirflowException as e:
                             if num_tries >= self.num_http_tries:
                                 self.log.error(f"http final failure {id}: " + str(e))

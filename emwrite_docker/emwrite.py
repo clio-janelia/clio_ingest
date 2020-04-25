@@ -257,7 +257,7 @@ def ngshard():
             if x <= 256 and y <= 256 and z <= 256:
                 return ndimage.interpolation.zoom(vol, 0.5)
             
-            target = np.zeros((x//2,y//2,z//2), dtype=np.uint8)
+            target = np.zeros((round(x/2),round(y/2),round(z/2)), dtype=np.uint8)
             for xiter in range(0, x, 256):
                 for yiter in range(0, y, 256):
                     for ziter in range(0, z, 256):
@@ -384,7 +384,7 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 "preshift_bits" : 9,
                 "shard_bits" : 21
              },
-             "size" : [ width//2, height//2, (maxz+1)//2 ],
+             "size" : [ width//2+1, height//2+1, (maxz+1)//2+1 ],
              "realsize" : [ width//2, height//2, (maxz-minz+1)//2 ],
              "offset" : [0, 0, 0],
              "realoffset" : [0, 0, minz//2]
@@ -404,7 +404,7 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 "preshift_bits" : 6,
                 "shard_bits" : 21
              },
-             "size" : [ width//4, height//4, (maxz+1)//4 ],
+             "size" : [ width//4+2, height//4+2, (maxz+1)//4+2 ],
              "realsize" : [ width//4, height//4, (maxz-minz+1)//4 ],
              "offset" : [0, 0, 0],
              "realoffset" : [0, 0, minz//4]
@@ -416,7 +416,7 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
              "encoding" : "raw" if isRaw else "jpeg",
              "key" : "64.0x64.0x64.0",
              "resolution" : [ 64, 64, 64 ],
-             "size" : [ width//8, height//8, (maxz+1)//8 ],
+             "size" : [ width//8+4, height//8+4, (maxz+1)//8+4 ],
              "realsize" : [ width//8, height//8, (maxz-minz+1)//8 ],
              "offset" : [0, 0, 0],
             "sharding" : {
@@ -436,7 +436,7 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
              "encoding" : "raw" if isRaw else "jpeg",
              "key" : "128.0x128.0x128.0",
              "resolution" : [ 128, 128, 128 ],
-             "size" : [ width//16, height//16, (maxz+1)//16 ],
+             "size" : [ width//16+8, height//16+8, (maxz+1)//16+8 ],
              "realsize" : [ width//16, height//16, (maxz-minz+1)//16 ],
              "offset" : [0, 0, 0],
              "sharding" : {
