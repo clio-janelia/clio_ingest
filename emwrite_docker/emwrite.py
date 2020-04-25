@@ -171,9 +171,9 @@ def ngshard():
         bucket_temp = storage_client.bucket(bucket_tiled_name)
         
         vol3d = None
+        def set_image(slice):
+            nonlocal vol3d
 
-        # fetch 1024x1024 tile from each imagee 
-        def set_image(slice, vol3d=None):
             blob = bucket_temp.blob(str(slice))
             
             # read offset binary
@@ -201,11 +201,19 @@ def ngshard():
             if slice == zstart:
                 vol3d = np.zeros((zfinish-zstart+1, height2, width2), dtype=np.uint8)
             vol3d[(slice-zstart), :, :] = img_array
-            return vol3d
+        
+        # sest first image
+        set_image(zstart)
 
-        vol3d = set_image(zstart)
+        # fetch 1024x1024 tile from each imagee
+        def set_images(start, finish, thread_id, num_threads):
+            for slice in range(start, finish+1):
+                if (slice % num_threads) == thread_id:
+                    set_image(slice)
 
-        threads = [threading.Thread(target=set_image, args=(slice, vol3d)) for slice in range(zstart+1, zfinish+1)]
+        # use 20 threads in parallel to fetch
+        num_threads = 20
+        threads = [threading.Thread(target=set_images, args=(zstart+1, zfinish, thread_id, num_threads)) for thread_id in range(num_threads)]
         for thread in threads:
             thread.start()
         for thread in threads:
