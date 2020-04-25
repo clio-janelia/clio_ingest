@@ -309,6 +309,40 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
     # !! makes offset 0 since there appears to be a bug in the
     # tensortore driver.
 
+    # !! refactor to use unsharded format for raw (just save
+    # 256 chunks) and for 64 and 128 cubes for jpeg (currently
+    # a bug with unsharded pieces in ng)
+
+    if isRaw:
+        return {
+                "@type" : "neuroglancer_multiscale_volume",
+                "data_type" : "uint8",
+                "num_channels" : 1,
+                "scales" : [
+                    {
+                        "chunk_sizes" : [
+                            [ 256, 256, 256 ]
+                            ],
+                        "encoding" : "raw" if isRaw else "jpeg",
+                        "key" : "8.0x8.0x8.0",
+                        "resolution" : [ 8, 8, 8 ],
+                        "sharding" : {
+                            "@type" : "neuroglancer_uint64_sharded_v1",
+                            "hash" : "identity",
+                            "minishard_bits" : 0,
+                            "minishard_index_encoding" : "gzip",
+                            "preshift_bits" : 0,
+                            "shard_bits" : 30
+                        },
+                        "size" : [ width, height, (maxz+1) ],
+                        "realsize" : [ width, height, (maxz-minz+1) ],
+                        "offset" : [0, 0, 0],
+                        "realoffset" : [0, 0, minz]
+                    }
+                ],
+                "type" : "image"
+            }
+
     # load json (don't need tensorflow)
     return {
        "@type" : "neuroglancer_multiscale_volume",
