@@ -25,7 +25,6 @@ app = Flask(__name__)
 
 # TODO: Limit origin list here: CORS(app, origins=[...])
 CORS(app)
-
 logger = logging.getLogger(__name__)
 
 @app.route('/alignedslice', methods=["POST"])
@@ -211,8 +210,7 @@ def ngshard():
             thread.start()
         for thread in threads:
             thread.join()
-
-
+    
         # write grayscale for each level
         num_levels = 5
         start = (tile_chunk[0]*shard_size, tile_chunk[1]*shard_size, zstart)
@@ -220,30 +218,49 @@ def ngshard():
         # put in fortran order
         vol3d = vol3d.transpose((2,1,0))
 
-        def _write_shard(level, start, vol3d, format):
-            # get spec for jpeg and post
-            dataset = ts.open({
-                'driver': 'neuroglancer_precomputed',
-                'kvstore': {
-                    'driver': 'gcs',
-                    'bucket': bucket_name,
-                    },
-                'path': f"neuroglancer/{format}",
-                'context': {
-                    'cache_pool': {
-                        'total_bytes_limit': 500_000_000
-                    }
-                },
-                'recheck_cached_data': 'open',
-                'scale_index': level
-            }).result()
+        def _write_shard(level, start, vol3d, format, dataset=None):
+            """Method to write shard through tensorstore.
+            """
+
+            if dataset is None:
+                # get spec for jpeg and post
+                dataset = ts.open({
+                    'driver': 'neuroglancer_precomputed',
+                    'kvstore': {
+                        'driver': 'gcs',
+                        'bucket': bucket_name,
+                        },
+                    'path': f"neuroglancer/{format}",
+                    'recheck_cached_data': 'open',
+                    'scale_index': level
+                }).result()
+                dataset = dataset[ts.d['channel'][0]]
 
             size = vol3d.shape
-            dataset = dataset[ts.d['channel'][0]]
             dataset[ start[0]:(start[0]+size[0]), start[1]:(start[1]+size[1]), start[2]:(start[2]+size[2]) ] = vol3d 
+            return dataset 
+
+        def _downsample(vol):
+            """Downsample piecewise.
+            """
+            x,y,z = vol.shape
+
+            # just call interpolate over whole volume if large enough
+            if x <= 256 and y <= 256 and z <= 256:
+                return ndimage.interpolation.zoom(vol, 0.5)
+            
+            target = np.zeros((x//2,y//2,z//2), dtype=np.uint8)
+            for xiter in range(0, x, 256):
+                for yiter in range(0, y, 256):
+                    for ziter in range(0, z, 256):
+                        target[(xiter//2):((xiter+256)//2), (yiter//2):((yiter+256)//2), (ziter//2):((ziter+256)//2)] = ndimage.interpolation.zoom(vol[xiter:(xiter+256),yiter:(yiter+256),ziter:(ziter+256)], 0.5)
+            return target 
+
         for level in range(num_levels):
             if level == 0:
                 # iterate through different 512 cubes since 1024 will not fit in memory
+                dataset_jpeg = None
+                dataset_raw = None
                 for iterz in range(0, 1024, 512):
                     for itery in range(0, 1024, 512):
                         for iterx in range(0, 1024, 512):
@@ -252,19 +269,17 @@ def ngshard():
                             if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
                                 continue
                             start_temp = (start[0]+iterx, start[1]+itery, start[2]+iterz) 
-
-                            _write_shard(level, start_temp, vol3d_temp, "jpeg")
+                            
+                            dataset_jpeg = _write_shard(level, start_temp, vol3d_temp, "jpeg", dataset_jpeg)
                             if write_raw:
-                                _write_shard(level, start_temp, vol3d_temp, "raw")
-                                        
+                                dataset_raw = _write_shard(level, start_temp, vol3d_temp, "raw", dataset_raw)
             else:
                 _write_shard(level, start, vol3d, "jpeg")
-                if write_raw:
-                    _write_shard(level, start, vol3d, "raw")
 
             # downsample
+            #vol3d = ndimage.interpolation.zoom(vol3d, 0.5)
+            vol3d = _downsample(vol3d)
             start = (start[0]//2, start[1]//2, start[2]//2)
-            vol3d = ndimage.interpolation.zoom(vol3d, 0.5)
             currsize = vol3d.shape
             if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
                 break
