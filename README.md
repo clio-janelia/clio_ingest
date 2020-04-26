@@ -48,7 +48,7 @@ To launch the server on localhost:8080 and scheduler:
 	% airflow scheduler
 
 By navigating to localhost:8080, one can see a dashboard with several example DAG workfows.
-Several variables must be set to enable the em_processing DAG to be executed.
+Several variables must be set to enable the emprocessing DAG to be executed.
 
 * Under Admin->Connections create ALIGN_CLOUD_RUN conn_id pointing to the http server running fiji
 * Under Admin->Connections create IMG_WRITE conn_id pointing to the http server running emwrite
@@ -99,8 +99,6 @@ functions or source data.
 Pass the following --conf parameter string to the airflow command line.
 
 ```json
-
-[
 {
 	"id": "sample",
 	"image": "img%05d.png",
@@ -110,7 +108,6 @@ Pass the following --conf parameter string to the airflow command line.
 	"project": "flyem-private",
 	"email": "someaddress"
 }
-]
 ```
 
 To avoid Google Cloud Storage during the test, SET the environment
@@ -214,10 +211,11 @@ retries on failures.  It is a good substrate
 to try to organize these diverse steps into a cogent execution model.  There are other tools that can
 process data using multiple workers such as Spark and Google Dataflow; however, many of the operations
 required in our pipeline are very simple, batch-oriented compute.  Furthermore, Airflow can call
-these other technologies for parts of the pipeline that might better utilizee those technology
+these other technologies for parts of the pipeline that might better utilize those technology
 stacks.  Finally, Airflow is well supported and documented and provides a good web UI for debugging
 and analyzing workflow runs.  Since Airflow is a generic solution, it seemed more likely to be portable
-in other cloud or compute environments.  We chose Google Composer since it wraps
+in other cloud or compute environments.  When debugging a workflow in Airflow, one can easily manually rerun
+individual tasks.  We chose Google Composer since it wraps
 Apache Airflow in a way that makes deployment easy.
 
 ### Downsides
@@ -230,7 +228,7 @@ seems a bit messy.  If a workflow changes, it is probably best to add the versio
 DAG name, so it is a distinctly named workflow.  There is not much dynamicism in the DAGs.  The DAGs
 need to be parseable and created before execution of the DAG (DAG run).
 One way to achieve this is by setting a variable in Airflow (it is generally non-ideal to require
-DAG creation to use an external database as the files are polled frequently).
+DAG creation to use an external database as the DAG files are executed frequently).
 
 Some of these Airflow design decisions are a reflection on the history of using Airflow to do
 scheduled, repeatable 'cron' jobs (which can also be seen by the execution time variable that is required
@@ -252,7 +250,7 @@ does not offer a serverless solution, requiring at least 3 nodes to run Airflow.
 the ability to use Cloud Run or a dynamic Kubernetes cluster, pre-allocation of compute would be
 unnecessary.  A better solution would be an on-demand, light-weight
 web service that is always available, which would be ideal from a costing point-of-view.
-If more compute is needed than 3 nodes, it is relatively easy to ramp-up and ramp-up down usinig the Google
+For now, however, if more compute is needed than 3 nodes, it is relatively easy to ramp-up and ramp-up down usinig the Google
 Kubernetes Engine (GKE).
 
 Airflow is designed to orchestrate different types of compute.  But the implementation for these
@@ -270,7 +268,7 @@ custom operators and embedded logic.
 
 The original implementation for emprocess workflow allowed dynamicism to be achieved by setting 
 Airflow variables, which could be parsed and used to create a dataset-specific DAG based on the number
-of images of the dataset.  Instead emprocess.py creates several processing
+of images of the dataset.  Instead emprocess.py now creates several processing
 workflows with different pipeline widths.  The width specifies the number of concurrent
 batch workers that can run at once.  Each of these batch workers leverage serverless compute
 (in the form of Google Cloud Run) via http calls.  Since these http calls are not compute intensive
@@ -278,7 +276,7 @@ and since Airflow processes are not light-weight, this package designs a custom 
 for batching multiple requests in a multi-threaded way per task.  This allows one to effectively
 achieve much more concurrency than width=64 for instance.  However, there is a trade-off
 in that even though fewer tasks are easier to schedule and manage at a high-level, there is not as
-much granularity for restarting individual tasks that fail.
+much granularity for debugging and restarting individual tasks that fail.
 
  emprocess.py also specifies a version number.  When large changes are made to the code, the user
 should modify this number, which will automatically trigger a new set of workflows tagged with the new
