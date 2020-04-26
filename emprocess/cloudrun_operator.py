@@ -96,9 +96,17 @@ class CloudRunBatchOperator(BaseOperator):
             except Exception:
                 pass
 
+        # ramp up time guesstimate
+        ramp_up = 30
+
         # start randomly
-        delay = random.randint(0, self.num_workers * 2)
-        time.sleep(delay)
+        if self.num_workers > 4:
+            import math
+            # assume there is some doubling rate for workers to come online
+            # (probably should sample an exponential)
+            sample_bound = round(math.log2(self.num_workers)*ramp_up*2)
+            delay = random.randint(0, sample_bound)
+            time.sleep(delay)
 
         results = {}
         failure = None
@@ -108,7 +116,8 @@ class CloudRunBatchOperator(BaseOperator):
             factor = 1
             spot = thread_id
             while spot > 0:
-                time.sleep(30)
+                delay = random.randint(0, ramp_up*2)
+                time.sleep(delay)
 
                 factor *= 2
                 spot -= factor
