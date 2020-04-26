@@ -309,6 +309,9 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
     # !! makes offset 0 since there appears to be a bug in the
     # tensortore driver.
 
+    # !! make jpeg chunks 256 cubes (return to 512, maybe,
+    # when tensorstore issues are addressed)
+
     # !! refactor to use unsharded format for raw (just save
     # 256 chunks) and for 64 and 128 cubes for jpeg (currently
     # a bug with unsharded pieces in ng)
@@ -321,7 +324,7 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 "scales" : [
                     {
                         "chunk_sizes" : [
-                            [ 256, 256, 256 ]
+                            [ 128, 128, 128 ]
                             ],
                         "encoding" : "raw" if isRaw else "jpeg",
                         "key" : "8.0x8.0x8.0",
@@ -361,8 +364,8 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 "hash" : "identity",
                 "minishard_bits" : 0,
                 "minishard_index_encoding" : "gzip",
-                "preshift_bits" : 9,
-                "shard_bits" : 24
+                "preshift_bits" : 6,
+                "shard_bits" : 27
              },
              "size" : [ width, height, (maxz+1) ],
              "realsize" : [ width, height, (maxz-minz+1) ],
@@ -381,8 +384,8 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 "hash" : "identity",
                 "minishard_bits" : 0,
                 "minishard_index_encoding" : "gzip",
-                "preshift_bits" : 9,
-                "shard_bits" : 21
+                "preshift_bits" : 6,
+                "shard_bits" : 24
              },
              "size" : [ width//2+1, height//2+1, (maxz+1)//2+1 ],
              "realsize" : [ width//2, height//2, (maxz-minz+1)//2 ],
