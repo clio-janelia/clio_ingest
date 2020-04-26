@@ -14,6 +14,7 @@ import json
 import time
 import threading
 import random
+import signal
 
 class CloudRunOperator(SimpleHttpOperator):
     @apply_defaults
@@ -82,9 +83,11 @@ class CloudRunBatchOperator(BaseOperator):
         self.validate_output = validate_output
 
     def execute(self, context):
+        CLOUDRUN_TIMEOUT = 901 # force termination if request hangs
+
         # generate mini tasks
         mini_tasks = self.gen_callable(self.worker_id, self.num_workers, self.data, **context)
-        
+    
         # -- call cloud run for each task --
         
         # set authorization
@@ -97,7 +100,7 @@ class CloudRunBatchOperator(BaseOperator):
                 pass
 
         # ramp up time guesstimate
-        ramp_up = 30
+        ramp_up = 60
 
         # start randomly
         if self.num_workers > 4:
@@ -110,9 +113,13 @@ class CloudRunBatchOperator(BaseOperator):
 
         results = {}
         failure = None
+        remaining_threads = self.num_threads
+
         def run_query(thread_id):
             nonlocal failure
+            nonlocal remaining_threads
 
+            self.log.info(f"start thread {thread_id}") 
             factor = 1
             spot = thread_id
             while spot > 0:
@@ -127,7 +134,7 @@ class CloudRunBatchOperator(BaseOperator):
                     break # exit thread if a failure is detected
                 if (idx % self.num_threads) == thread_id:
                     params = json.dumps(task)
-                    self.log.info(f"http params {id}: {params}") 
+                    self.log.info(f"(thread {thread_id}) http params {id}: {params}") 
 
                     http = HttpHook("POST", http_conn_id=self.conn_id)
                     
@@ -143,18 +150,19 @@ class CloudRunBatchOperator(BaseOperator):
                                         self.endpoint,
                                         params,
                                         self.headers,
-                                        {}
+                                        {"timeout": CLOUDRUN_TIMEOUT}
                                         )
-                            self.log.info(f"completed call {id}") 
+                            self.log.info(f"(thread {thread_id}) completed call {id}") 
                         except AirflowException as e:
                             if num_tries >= self.num_http_tries:
-                                self.log.error(f"http final failure {id}: " + str(e))
+                                self.log.error(f"(thread {thread_id}) http final failure {id}: " + str(e))
                                 failure = e
                                 break
-                            self.log.error(f"http failure {id}: " + str(e))
+                            self.log.error(f"(thread {thread_id}) http failure {id}: " + str(e))
                             time.sleep(120) # wait a minute to try again
                             success = False
                         except Exception as e:
+                            self.log.info(f"thread {thread_id} caught exception") 
                             failure = e
                             break
 
@@ -169,14 +177,29 @@ class CloudRunBatchOperator(BaseOperator):
 
                     if self.xcom_push_flag:
                         results[id] = response.text
+            remaining_threads -= 1
+            self.log.info(f"finish thread {thread_id}") 
+        
+        # create signal catcher to properly catch errors
+        def sighandler(signum, frame):
+            nonlocal failure
+            self.log.info(f"interrupt caught") 
+            failure = AirflowException("CloudRunBatch was interrupted")
+
+        signal.signal(signal.SIGINT, sighandler)
 
         threads = [threading.Thread(target=run_query, args=[thread_id]) for thread_id in range(self.num_threads)]
         for thread in threads:
             thread.start()
+
+        # wait for all threads to finish before joining and watch for SIGINT
+        while failure is None and remaining_threads > 0:
+            time.sleep(5)
+
         for thread in threads:
             thread.join()
         
-        # raise error if one of the threads failed
+        # raise error if one of the threads failed or there was an INT
         if failure is not None:
             raise failure
 

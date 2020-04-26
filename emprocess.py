@@ -206,7 +206,7 @@ for WORKER_POOL in WORKER_POOLS:
                                 {
                                     "action": {"type": "Delete"},
                                     "condition": {
-                                        "age": 1
+                                        "age": 5
                                         }
                                 }
                                 ]
