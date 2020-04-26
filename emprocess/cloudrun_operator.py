@@ -9,6 +9,7 @@ from airflow.utils.decorators import apply_defaults
 from airflow.models import BaseOperator
 from airflow.hooks.http_hook import HttpHook
 from airflow import AirflowException
+from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 import subprocess
 import json
 import time
@@ -35,8 +36,6 @@ class CloudRunOperator(SimpleHttpOperator):
 
         return super().execute(context)
 
-
-
 class CloudRunBatchOperator(BaseOperator):
     """Executes a series of mini tasks (cloud run) from a batch.
 
@@ -45,7 +44,7 @@ class CloudRunBatchOperator(BaseOperator):
     teemplated.
 
     """
-    template_fields = ['data']
+    template_fields = ['data', 'cache']
 
     @apply_defaults
     def __init__(
@@ -57,6 +56,7 @@ class CloudRunBatchOperator(BaseOperator):
         conn_id=None, # string for connection
         endpoint="", # string for endpoint
         headers=None, # dict with http headers
+        cache="", # directory location for storing results
         log_response = False,
         num_http_tries = 1, # int
         xcom_push = False,
@@ -81,6 +81,7 @@ class CloudRunBatchOperator(BaseOperator):
         self.num_http_tries = num_http_tries
         self.num_threads = num_threads
         self.validate_output = validate_output
+        self.cache = cache
 
     def execute(self, context):
         CLOUDRUN_TIMEOUT = 901 # force termination if request hangs
@@ -114,72 +115,100 @@ class CloudRunBatchOperator(BaseOperator):
         results = {}
         failure = None
         remaining_threads = self.num_threads
+        num_workers = self.num_workers
 
         def run_query(thread_id):
             nonlocal failure
             nonlocal remaining_threads
 
-            self.log.info(f"start thread {thread_id}") 
-            factor = 1
-            spot = thread_id
-            while spot > 0:
-                delay = random.randint(0, ramp_up*2)
-                time.sleep(delay)
+            try:
+                self.log.info(f"start thread {thread_id}") 
+                factor = 1
+                spot = thread_id
+            
+                if num_workers > 4:
+                    while spot > 0:
+                        delay = random.randint(0, ramp_up*2)
+                        time.sleep(delay)
 
-                factor *= 2
-                spot -= factor
+                        factor *= 2
+                        spot -= factor
 
-            for idx, [id, task] in enumerate(mini_tasks):
-                if failure is not None:
-                    break # exit thread if a failure is detected
-                if (idx % self.num_threads) == thread_id:
-                    params = json.dumps(task)
-                    self.log.info(f"(thread {thread_id}) http params {id}: {params}") 
+                for idx, [id, task] in enumerate(mini_tasks):
+                    if failure is not None:
+                        break # exit thread if a failure is detected
+                    if (idx % self.num_threads) == thread_id:
+                        params = json.dumps(task)
+                        self.log.info(f"(thread {thread_id}) http params {id}: {params}") 
 
-                    http = HttpHook("POST", http_conn_id=self.conn_id)
-                    
-                    # enable unconditional retries at mini task level
-                    # to avoid problems with the whole batch crashing
-                    num_tries = 0
-                    success = False
-                    while not success and num_tries < self.num_http_tries:
-                        num_tries += 1
-                        success = True
-                        try:
-                            response = http.run(
-                                        self.endpoint,
-                                        params,
-                                        self.headers,
-                                        {"timeout": CLOUDRUN_TIMEOUT}
-                                        )
-                            self.log.info(f"(thread {thread_id}) completed call {id}") 
-                        except AirflowException as e:
-                            if num_tries >= self.num_http_tries:
-                                self.log.error(f"(thread {thread_id}) http final failure {id}: " + str(e))
-                                failure = e
-                                break
-                            self.log.error(f"(thread {thread_id}) http failure {id}: " + str(e))
-                            time.sleep(120) # wait a minute to try again
+                        final_resp = None
+                        cached_result = False
+
+                        # save result if there is a failure
+                        if self.cache != "":
+                            try:
+                                # see if result was already computed
+                                final_resp = self.deserialize_results(self.cache, str(id))
+                                self.log.info(f"(thread {thread_id}) cached result {id}")
+                                cached_result = True
+                            except Exception as e:
+                                # not in cache
+                                pass
+                        
+                        # fetch if no cache
+                        if final_resp is None:
+                            http = HttpHook("POST", http_conn_id=self.conn_id)
+                            
+                            # enable unconditional retries at mini task level
+                            # to avoid problems with the whole batch crashing
+                            num_tries = 0
                             success = False
-                        except Exception as e:
-                            self.log.info(f"thread {thread_id} caught exception") 
-                            failure = e
-                            break
+                            while not success and num_tries < self.num_http_tries:
+                                num_tries += 1
+                                success = True
+                                try:
+                                    response = http.run(
+                                                self.endpoint,
+                                                params,
+                                                self.headers,
+                                                {"timeout": CLOUDRUN_TIMEOUT}
+                                                )
+                                    self.log.info(f"(thread {thread_id}) completed call {id}") 
+                                except AirflowException as e:
+                                    if num_tries >= self.num_http_tries:
+                                        self.log.error(f"(thread {thread_id}) http final failure {id}: " + str(e))
+                                        failure = e
+                                        break
+                                    self.log.error(f"(thread {thread_id}) http failure {id}: " + str(e))
+                                    time.sleep(120) # wait a minute to try again
+                                    success = False
+                                except Exception as e:
+                                    self.log.info(f"thread {thread_id} caught exception") 
+                                    failure = e
+                                    break
 
-                    if self.log_response:
-                        self.log.info(response.text) 
+                            # check if output is validate
+                            if self.validate_output is not None:
+                                if not self.validate_output(response):
+                                    failure = AirflowException(f"output test failed {id}")
+                                    break
+                            final_resp = response.text
 
-                    # check if output is validate
-                    if self.validate_output is not None:
-                        if not self.validate_output(response):
-                            failure = AirflowException(f"output test failed {id}")
-                            break
+                        if self.log_response:
+                            self.log.info(final_resp) 
 
-                    if self.xcom_push_flag:
-                        results[id] = response.text
-            remaining_threads -= 1
+                        # save result if there is a failure
+                        if self.cache != "" and not cached_result:
+                            self.serialize_results(self.cache, str(id), final_resp)
+
+                        if self.xcom_push_flag:
+                            results[id] = final_resp
+            except Exception as e:
+                failure = e
+                
             self.log.info(f"finish thread {thread_id}") 
-        
+            remaining_threads -= 1
+
         # create signal catcher to properly catch errors
         def sighandler(signum, frame):
             nonlocal failure
@@ -206,3 +235,60 @@ class CloudRunBatchOperator(BaseOperator):
         if self.xcom_push_flag:
             return results
 
+
+    def serialize_results(self, dir, loc, res):
+        """Serialize to locaiton on disk.
+
+        Note: only support gs:// endpoints.
+        """
+
+        # strip gs prefix if it exists
+        if dir.startswith("gs://"):
+            dir  = dir[5:]
+        dir_path = dir.split("/")
+
+        # grab bucket name
+        bucket_name = dir_path[0]
+        
+        # get path
+        path = "/".join(dir_path[1:])
+        if path[-1] != "/":
+            path += "/"
+        path += loc
+
+        ghook = GoogleCloudStorageHook() # uses default gcp connection
+        client = ghook.get_conn()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name=path)
+        blob.upload_from_string(res) 
+
+    def deserialize_results(self, dir, loc):
+        """Deserialize to locaiton on disk.
+
+        Note: only support gs:// endpoints.
+        """
+
+        # strip gs prefix if it exists
+        if dir.startswith("gs://"):
+            dir  = dir[5:]
+        dir_path = dir.split("/")
+
+        # grab bucket name
+        bucket_name = dir_path[0]
+        
+        # get path
+        path = "/".join(dir_path[1:])
+        if path[-1] != "/":
+            path += "/"
+        path += loc
+
+        ghook = GoogleCloudStorageHook() # uses default gcp connection
+        client = ghook.get_conn()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name=path)
+        # raises error if not found
+        return blob.download_as_string().decode()
+
+
+
+  

@@ -71,7 +71,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
 
         for slice in range(minz, maxz):
             if ("raw/" + (image % slice)) not in file_names:  
-                raise AirflowException("raw data not loaded properly")
+                raise AirflowException(f"raw data not loaded properly.  Missing raw/{image % slice}")
 
     # find global coordinate system and write transforms
     start_t = PythonOperator(
@@ -353,8 +353,9 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             endpoint="",
             headers=headers,
             log_response=True,
-            num_http_tries=2,
+            num_http_tries=4,
             xcom_push=True,
+            cache="gs://" + "{{ dag_run.conf['source'] }}" + "/align/affine_cache" if not TEST_MODE else "",
             validate_output=validate_output,
             pool=pool,
             dag=dag,
@@ -380,7 +381,8 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             endpoint="/alignedslice",
             headers=headers,
             log_response=False,
-            num_http_tries=2,
+            cache="gs://" + "{{ dag_run.conf['source'] }}" + "/align/write_cache" if not TEST_MODE else "",
+            num_http_tries=4,
             xcom_push=False,
             pool=pool,
             dag=dag,
