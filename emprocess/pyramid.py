@@ -85,7 +85,7 @@ def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST
         task_list = []
         for iterz in range(zstart, zfinish+1):
             for itery in range(ystart, yfinish+1):
-                for iterx in range(xstart, xstart+1):
+                for iterx in range(xstart, xfinish+1):
                     if (glb_iter % num_workers) == worker_id:
                         params = {
                                     "dest": data["source"], # will write to location + /ng/raw or /ng/jpeeg
