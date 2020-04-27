@@ -174,6 +174,7 @@ class CloudRunBatchOperator(BaseOperator):
                                                 {"timeout": CLOUDRUN_TIMEOUT}
                                                 )
                                     self.log.info(f"(thread {thread_id}) completed call {id}") 
+                                    final_resp = response.text
                                 except AirflowException as e:
                                     if num_tries >= self.num_http_tries:
                                         self.log.error(f"(thread {thread_id}) http final failure {id}: " + str(e))
@@ -187,22 +188,24 @@ class CloudRunBatchOperator(BaseOperator):
                                     failure = e
                                     break
 
+                        # only log result if no error
+                        if failure is None:
                             # check if output is validate
                             if self.validate_output is not None:
                                 if not self.validate_output(response):
                                     failure = AirflowException(f"output test failed {id}")
                                     break
-                            final_resp = response.text
 
-                        if self.log_response:
-                            self.log.info(final_resp) 
+                            if self.log_response:
+                                self.log.info(final_resp) 
 
-                        # save result if there is a failure
-                        if self.cache != "" and not cached_result:
-                            self.serialize_results(self.cache, str(id), final_resp)
+                            # save result if there is a failure
+                            if self.cache != "" and not cached_result:
+                                self.serialize_results(self.cache, str(id), final_resp)
 
-                        if self.xcom_push_flag:
-                            results[id] = final_resp
+                            if self.xcom_push_flag:
+                                results[id] = final_resp
+
             except Exception as e:
                 failure = e
                 
