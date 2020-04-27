@@ -175,7 +175,7 @@ class CloudRunBatchOperator(BaseOperator):
                                                 )
                                     self.log.info(f"(thread {thread_id}) completed call {id}") 
                                     final_resp = response.text
-                                except AirflowException as e:
+                                except Exception as e:
                                     if num_tries >= self.num_http_tries:
                                         self.log.error(f"(thread {thread_id}) http final failure {id}: " + str(e))
                                         failure = e
@@ -183,10 +183,6 @@ class CloudRunBatchOperator(BaseOperator):
                                     self.log.error(f"(thread {thread_id}) http failure {id}: " + str(e))
                                     time.sleep(120) # wait a minute to try again
                                     success = False
-                                except Exception as e:
-                                    self.log.info(f"thread {thread_id} caught exception") 
-                                    failure = e
-                                    break
 
                         # only log result if no error
                         if failure is None:
