@@ -12,8 +12,8 @@ RUN python3 -m pip install google-cloud-storage
 RUN python3 -m pip install flask
 RUN python3 -m pip install flask-cors
 RUN python3 -m pip install scipy
-
 RUN python3 -m pip install tensorstore -vv
+
 
 WORKDIR /opt/app
 COPY emwrite.py ./ 
