@@ -34,7 +34,7 @@ a Google project id with billable account information.
 To install Airflow and related components
 
 	% pip install airflow
-	% pip install google_cloud_storage httplib2 google_uth_httplib2 google-api-python-client # to enable google drivers
+	% pip install google_cloud_storage httplib2 google_auth_httplib2 google-api-python-client # to enable google drivers
 
 The emprocess workflow calls web applications that perform alignment
 and writing tasks.  The alignment is done using the fiji Docker container that can be hosted 

@@ -85,20 +85,21 @@ class CloudRunBatchOperator(BaseOperator):
 
     def execute(self, context):
         CLOUDRUN_TIMEOUT = 901 # force termination if request hangs
+        TOKEN_TIMEOUT = 3000 # how often to refresh token
 
         # generate mini tasks
         mini_tasks = self.gen_callable(self.worker_id, self.num_workers, self.data, **context)
     
         # -- call cloud run for each task --
-        
-        # set authorization
+         # add authorization if not presen and gcloud is available
         if "Authorization" not in self.headers:
             # extract auth token from gcloud
             try:
                 token = subprocess.check_output(["gcloud auth print-identity-token"], shell=True).decode()
                 self.headers["Authorization"] = f"Bearer {token[:-1]}"
             except Exception:
-                pass
+                pass      
+
 
         # ramp up time guesstimate
         ramp_up = 60
@@ -120,6 +121,7 @@ class CloudRunBatchOperator(BaseOperator):
         def run_query(thread_id):
             nonlocal failure
             nonlocal remaining_threads
+            start_time = time.time()
 
             try:
                 self.log.info(f"start thread {thread_id}") 
@@ -133,6 +135,7 @@ class CloudRunBatchOperator(BaseOperator):
 
                         factor *= 2
                         spot -= factor
+                headers = self.headers.copy()
 
                 for idx, [id, task] in enumerate(mini_tasks):
                     if failure is not None:
@@ -157,6 +160,17 @@ class CloudRunBatchOperator(BaseOperator):
                         
                         # fetch if no cache
                         if final_resp is None:
+
+                            if (time.time() - start_time) >  TOKEN_TIMEOUT:
+                                start_time = time.time()
+                                # set token if expired
+                                # extract auth token from gcloud
+                                try:
+                                    token = subprocess.check_output(["gcloud auth print-identity-token"], shell=True).decode()
+                                    headers["Authorization"] = f"Bearer {token[:-1]}"
+                                except Exception:
+                                    pass
+
                             http = HttpHook("POST", http_conn_id=self.conn_id)
                             
                             # enable unconditional retries at mini task level
@@ -186,8 +200,8 @@ class CloudRunBatchOperator(BaseOperator):
 
                         # only log result if no error
                         if failure is None:
-                            # check if output is validate
-                            if self.validate_output is not None:
+                            # check if output is valid
+                            if self.validate_output is not None and not cached_result:
                                 if not self.validate_output(response):
                                     failure = AirflowException(f"output test failed {id}")
                                     break
