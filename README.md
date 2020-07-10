@@ -1,4 +1,4 @@
-# emprocssing_workflow
+# emprocessing_workflow
 
 This package defines an Apache Airflow workflow to ingest and process data
 collected by electron microscopy (EM).  The goal is to produce a push-button workflow
