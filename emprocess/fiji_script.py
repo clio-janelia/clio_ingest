@@ -127,6 +127,8 @@ try {
 	System.out.println("{");
 	System.out.println("\\"width\\":" + imp1.getWidth().toString() + ",");
 	System.out.println("\\"height\\":" + imp1.getHeight().toString() + ",");
+	System.out.println("\\"width0\\":" + imp2.getWidth().toString() + ",");
+	System.out.println("\\"height0\\":" + imp2.getHeight().toString() + ",");
 	
 	/*JSONObject obj = new JSONObject();
 

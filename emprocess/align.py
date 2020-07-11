@@ -129,6 +129,9 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
 
             width = res["width"] * downsample_factor
             height = res["height"] * downsample_factor
+            
+            width0 = res["width0"] * downsample_factor
+            height0 = res["height0"] * downsample_factor
 
             def adjust_trans(trans):
                 """Flips Y and moves origin to top left.
@@ -148,7 +151,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             # use translatee coefficients if image rotated less than 0.5 percent
             if affine[2] <= 0.0008:
                 affine = translation
-            return affine, [width, height]
+            return affine, [width, height], [width0, height0]
 
         # read each transform and create global coordinate system
         # (note: each transform is applied to n+1 slice, image sizes are assumed to have identical dims)
@@ -169,12 +172,18 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             # affine has already been modified to treat top-left of image as origin
 
             # process results
-            curr_affine, bbox = process_results(res)
+            curr_affine, bbox, bbox0 = process_results(res)
             
             # get bbox
             if slice == minz:
-                global_bbox = [0, bbox[0], 0, bbox[1]] 
-    
+                global_bbox = [0, bbox0[0], 0, bbox0[1]] 
+   
+            if bbox[0] > global_bbox[1]:
+                global_bbox[1] = bbox[0]
+
+            if bbox[1] > global_bbox[3]:
+                global_bbox[3] = bbox[1]
+
             # multiply matrices
             mod_affine = []
             mod_affine.append(last_affine[0]*curr_affine[0] + last_affine[2]*curr_affine[1])
