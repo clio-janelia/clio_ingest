@@ -324,19 +324,11 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 "scales" : [
                     {
                         "chunk_sizes" : [
-                            [ 128, 128, 128 ]
+                            [ 256, 256, 256 ]
                             ],
-                        "encoding" : "raw" if isRaw else "jpeg",
+                        "encoding" : "raw",
                         "key" : "8.0x8.0x8.0",
                         "resolution" : [ 8, 8, 8 ],
-                        "sharding" : {
-                            "@type" : "neuroglancer_uint64_sharded_v1",
-                            "hash" : "identity",
-                            "minishard_bits" : 0,
-                            "minishard_index_encoding" : "gzip",
-                            "preshift_bits" : 0,
-                            "shard_bits" : 30
-                        },
                         "size" : [ width, height, (maxz+1) ],
                         "realsize" : [ width, height, (maxz-minz+1) ],
                         "offset" : [0, 0, 0],
@@ -442,14 +434,6 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
              "size" : [ width//16+8, height//16+8, (maxz+1)//16+8 ],
              "realsize" : [ width//16, height//16, (maxz-minz+1)//16 ],
              "offset" : [0, 0, 0],
-             "sharding" : {
-                "@type" : "neuroglancer_uint64_sharded_v1",
-                "hash" : "identity",
-                "minishard_bits" : 0,
-                "minishard_index_encoding" : "gzip",
-                "preshift_bits" : 0,
-                "shard_bits" : 21
-             },
              "realoffset" : [0, 0, minz//16]
           }
        ],
