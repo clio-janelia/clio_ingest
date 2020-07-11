@@ -45,6 +45,7 @@ WORKER_POOLS = [128, 64, 4, 1]
 
 from airflow.models import DAG
 from airflow.operators.python_operator import PythonOperator, BranchPythonOperator, ShortCircuitOperator
+from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 from datetime import datetime
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.operators.email_operator import EmailOperator
@@ -231,12 +232,36 @@ for WORKER_POOL in WORKER_POOLS:
             html_content="Job finished.  View on neuroglancer (source = precomputed://gs://{{ dag_run.conf['source'] }}/neuroglancer/jpeg)",
             dag=dag
     )
+   
+    def write_status(**context):
+        # test mode disable
+        if not TEST_MODE:
+            # write config and time stamp
+            ghook = GoogleCloudStorageHook() # uses default gcp connection
+            client = ghook.get_conn()
+            source = context["dag_run"].conf.get("source")
+            bucket = client.bucket(source)
+            blob = bucket.blob(blob_name="ingestion_dagrun.txt")
+            project_id = context["dag_run"].conf.get("project_id")
+
+            data = context["dag_run"].conf
+            data["execution_date"] = str(context.get("execution_date")) 
+            data = json.dumps(data)
+            blob.upload_from_string(data) 
+
+    # write results to gbucket
+    write_status_t = PythonOperator(
+        task_id="write_status",
+        python_callable=write_status,
+        provide_context=True,
+        dag=dag,
+    )
 
     # cleanup is triggered if alignment completes properly
     validate_t >> align_start_t
     align_end_t >> ngingest_start_t
-    [ngingest_end_t, cleanup_t] >> notify_t
-    
     [align_end_t, ngingest_end_t] >> isaligned_t >> cleanup_t 
+    [ngingest_end_t, cleanup_t] >> notify_t >> write_status_t
+    
 
 
