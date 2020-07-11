@@ -263,13 +263,13 @@ def ngshard():
 
             # just call interpolate over whole volume if large enough
             if x <= 256 and y <= 256 and z <= 256:
-                return ndimage.interpolation.zoom(vol, 0.5)
+                return ndimage.interpolation.zoom(vol, 0.5, order=1)
             
             target = np.zeros((round(x/2),round(y/2),round(z/2)), dtype=np.uint8)
             for xiter in range(0, x, 256):
                 for yiter in range(0, y, 256):
                     for ziter in range(0, z, 256):
-                        target[(xiter//2):((xiter+256)//2), (yiter//2):((yiter+256)//2), (ziter//2):((ziter+256)//2)] = ndimage.interpolation.zoom(vol[xiter:(xiter+256),yiter:(yiter+256),ziter:(ziter+256)], 0.5)
+                        target[(xiter//2):((xiter+256)//2), (yiter//2):((yiter+256)//2), (ziter//2):((ziter+256)//2)] = ndimage.interpolation.zoom(vol[xiter:(xiter+256),yiter:(yiter+256),ziter:(ziter+256)], 0.5, order=1)
             return target 
 
         for level in range(num_levels):
