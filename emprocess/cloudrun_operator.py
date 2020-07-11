@@ -160,17 +160,6 @@ class CloudRunBatchOperator(BaseOperator):
                         
                         # fetch if no cache
                         if final_resp is None:
-
-                            if (time.time() - start_time) >  TOKEN_TIMEOUT:
-                                start_time = time.time()
-                                # set token if expired
-                                # extract auth token from gcloud
-                                try:
-                                    token = subprocess.check_output(["gcloud auth print-identity-token"], shell=True).decode()
-                                    headers["Authorization"] = f"Bearer {token[:-1]}"
-                                except Exception:
-                                    pass
-
                             http = HttpHook("POST", http_conn_id=self.conn_id)
                             
                             # enable unconditional retries at mini task level
@@ -178,6 +167,17 @@ class CloudRunBatchOperator(BaseOperator):
                             num_tries = 0
                             success = False
                             while not success and num_tries < self.num_http_tries:
+                                # reset token if expired
+                                if (time.time() - start_time) >  TOKEN_TIMEOUT:
+                                    start_time = time.time()
+                                    # set token if expired
+                                    # extract auth token from gcloud
+                                    try:
+                                        token = subprocess.check_output(["gcloud auth print-identity-token"], shell=True).decode()
+                                        headers["Authorization"] = f"Bearer {token[:-1]}"
+                                    except Exception:
+                                        pass
+
                                 num_tries += 1
                                 success = True
                                 try:
