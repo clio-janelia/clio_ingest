@@ -139,7 +139,11 @@ for WORKER_POOL in WORKER_POOLS:
             logging.info("Enables raw pyramid creation")
         else:
             logging.info("Disable raw pyramid creation")
-    
+
+        # check resolution
+        res =  kwargs['dag_run'].conf.get('resolution', 8)
+        logging.info(f"Resolution: {res}")
+
         # log downsample factor
         downsample_factor = kwargs['dag_run'].conf.get('downsample_factor', 1)
         logging.info(f"Downsample factor: {downsample_factor}")

@@ -128,6 +128,7 @@ def ngmeta():
         bucket_name = config_file["dest"] # contains source and destination
         minz  = int(config_file["minz"])
         maxz  = int(config_file["maxz"])
+        res = int(config_file["resolution"])
         [width, height]  = json.loads(config_file["bbox"])
         shard_size  = config_file["shard-size"] 
         if shard_size != 1024:
@@ -136,14 +137,14 @@ def ngmeta():
 
         # write jpeg config to bucket/neuroglancer/raw/info
         storage_client = storage.Client()
-        config = create_meta(width, height, minz, maxz, shard_size, False)
+        config = create_meta(width, height, minz, maxz, shard_size, False, res)
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob("neuroglancer/jpeg/info")
         blob.upload_from_string(json.dumps(config))
        
         # write raw config to bucket/neuroglancer/raw/info
         if write_raw:
-            config = create_meta(width, height, minz, maxz, shard_size, True)
+            config = create_meta(width, height, minz, maxz, shard_size, True, res)
             blob = bucket.blob("neuroglancer/raw/info")
             blob.upload_from_string(json.dumps(config))
 
@@ -306,7 +307,7 @@ def ngshard():
     except Exception as e:
         return Response(traceback.format_exc(), 400)
 
-def create_meta(width, height, minz, maxz, shard_size, isRaw):
+def create_meta(width, height, minz, maxz, shard_size, isRaw, res):
     if (width % shard_size) > 0: 
         width += ( 1024 - (width % shard_size))
     if (height % shard_size) > 0: 
@@ -335,8 +336,8 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                             [ 256, 256, 256 ]
                             ],
                         "encoding" : "raw",
-                        "key" : "8.0x8.0x8.0",
-                        "resolution" : [ 8, 8, 8 ],
+                        "key" : f"{res}.0x{res}.0x{res}.0",
+                        "resolution" : [ res, res, res ],
                         "size" : [ width, height, (maxz+1) ],
                         "realsize" : [ width, height, (maxz-minz+1) ],
                         "offset" : [0, 0, 0],
@@ -357,8 +358,8 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 [ 64, 64, 64 ]
              ],
              "encoding" : "raw" if isRaw else "jpeg",
-             "key" : "8.0x8.0x8.0",
-             "resolution" : [ 8, 8, 8 ],
+             "key" : f"{res}.0x{res}.0x{res}.0",
+             "resolution" : [ res, res, res ],
              "sharding" : {
                 "@type" : "neuroglancer_uint64_sharded_v1",
                 "hash" : "identity",
@@ -377,8 +378,8 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 [ 64, 64, 64 ]
              ],
              "encoding" : "raw" if isRaw else "jpeg",
-             "key" : "16.0x16.0x16.0",
-             "resolution" : [ 16, 16, 16 ],
+             "key" : f"{res*2}.0x{res*2}.0x{res*2}.0",
+             "resolution" : [ res*2, res*2, res*2 ],
              "sharding" : {
                 "@type" : "neuroglancer_uint64_sharded_v1",
                 "hash" : "identity",
@@ -397,8 +398,8 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 [ 64, 64, 64 ]
              ],
              "encoding" : "raw" if isRaw else "jpeg",
-             "key" : "32.0x32.0x32.0",
-             "resolution" : [ 32, 32, 32 ],
+             "key" : f"{res*4}.0x{res*4}.0x{res*4}.0",
+             "resolution" : [ res*4, res*4, res*4 ],
              "sharding" : {
                 "@type" : "neuroglancer_uint64_sharded_v1",
                 "hash" : "identity",
@@ -417,8 +418,8 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 [ 64, 64, 64 ]
              ],
              "encoding" : "raw" if isRaw else "jpeg",
-             "key" : "64.0x64.0x64.0",
-             "resolution" : [ 64, 64, 64 ],
+             "key" : f"{res*8}.0x{res*8}.0x{res*8}.0",
+             "resolution" : [ res*8, res*8, res*8 ],
              "size" : [ width//8+4, height//8+4, (maxz+1)//8+4 ],
              "realsize" : [ width//8, height//8, (maxz-minz+1)//8 ],
              "offset" : [0, 0, 0],
@@ -429,8 +430,8 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 [ 64, 64, 64 ]
              ],
              "encoding" : "raw" if isRaw else "jpeg",
-             "key" : "128.0x128.0x128.0",
-             "resolution" : [ 128, 128, 128 ],
+             "key" : f"{res*16}.0x{res*16}.0x{res*16}.0",
+             "resolution" : [ res*16, res*16, res*16 ],
              "size" : [ width//16+8, height//16+8, (maxz+1)//16+8 ],
              "realsize" : [ width//16, height//16, (maxz-minz+1)//16 ],
              "offset" : [0, 0, 0],
@@ -441,8 +442,8 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw):
                 [ 64, 64, 64 ]
              ],
              "encoding" : "raw" if isRaw else "jpeg",
-             "key" : "256.0x256.0x256.0",
-             "resolution" : [ 256, 256, 256 ],
+             "key" : f"{res*32}.0x{res*32}.0x{res*32}.0",
+             "resolution" : [ res*32, res*32, res*32 ],
              "size" : [ width//32+16, height//32+16, (maxz+1)//32+16 ],
              "realsize" : [ width//32, height//32, (maxz-minz+1)//32 ],
              "offset" : [0, 0, 0],

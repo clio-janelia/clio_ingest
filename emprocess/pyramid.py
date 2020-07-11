@@ -58,7 +58,8 @@ def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST
                 "maxz": "{{ dag_run.conf['maxz'] }}",
                 "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
                 "shard-size": SHARD_SIZE,
-                "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}"
+                "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}",
+                "resolution": "{{ dag_run.conf.get('resolution', 8) }}"
         }),
         headers={"Content-Type": "application/json", "Accept": "application/json, text/plain, */*"},
         dag=dag
