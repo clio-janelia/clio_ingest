@@ -17,6 +17,7 @@ from scipy import ndimage
 import io
 import traceback
 import threading
+from skimage import exposure
 
 # allow very large images to be read (up to 1 gigavoxel)
 Image.MAX_IMAGE_PIXELS = 1000000000
@@ -49,6 +50,13 @@ def alignedslice():
         blob = bucket.blob("raw/" + name)
         pre_image_bin = blob.download_as_string()
         im = Image.open(io.BytesIO(pre_image_bin))
+        del pre_image_bin
+        
+        tmp_arr = np.array(im) 
+        tmp_arr = (exposure.equalize_adapthist(tmp_arr, kernel_size=1024) * 255).astype(np.uint8) 
+        im = Image.fromarray(tmp_arr)
+        del tmp_arr 
+
         #pre_image = numpy.asarray(im)
         
         # modify affine to satisfy the pil transform interface

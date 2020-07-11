@@ -13,7 +13,7 @@ RUN python3 -m pip install flask
 RUN python3 -m pip install flask-cors
 RUN python3 -m pip install scipy
 RUN python3 -m pip install tensorstore -vv
-
+RUN python3 -m pip install scikit-image
 
 WORKDIR /opt/app
 COPY emwrite.py ./ 
