@@ -131,6 +131,7 @@ def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST
             cache="gs://" + "{{ dag_run.conf['source'] }}" + "/neuroglancer/cache" if not TEST_MODE else "",
             xcom_push=False,
             pool=pool,
+            try_number = "{{ task_instance.try_number }}",
             dag=dag,
         )
 

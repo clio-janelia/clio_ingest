@@ -44,7 +44,7 @@ class CloudRunBatchOperator(BaseOperator):
     teemplated.
 
     """
-    template_fields = ['data', 'cache']
+    template_fields = ['data', 'cache', 'try_number']
 
     @apply_defaults
     def __init__(
@@ -62,6 +62,7 @@ class CloudRunBatchOperator(BaseOperator):
         xcom_push = False,
         num_threads=8, # default threading for low-compute jobs
         validate_output=None, # callable with response as parameter
+        try_number=1,
         *args,
         **kwargs
     ):
@@ -82,11 +83,13 @@ class CloudRunBatchOperator(BaseOperator):
         self.num_threads = num_threads
         self.validate_output = validate_output
         self.cache = cache
+        self.try_number = try_number
 
     def execute(self, context):
         CLOUDRUN_TIMEOUT = 901 # force termination if request hangs
         TOKEN_TIMEOUT = 3000 # how often to refresh token
 
+        self.try_number = int(self.try_number)
         # generate mini tasks
         mini_tasks = self.gen_callable(self.worker_id, self.num_workers, self.data, **context)
     
@@ -100,12 +103,11 @@ class CloudRunBatchOperator(BaseOperator):
             except Exception:
                 pass      
 
-
         # ramp up time guesstimate
         ramp_up = 60
 
         # start randomly
-        if self.num_workers > 4:
+        if self.num_workers > 4 and self.try_number == 1:
             import math
             # assume there is some doubling rate for workers to come online
             # (probably should sample an exponential)
@@ -128,7 +130,7 @@ class CloudRunBatchOperator(BaseOperator):
                 factor = 1
                 spot = thread_id
             
-                if num_workers > 4:
+                if num_workers > 4 and self.try_number == 1:
                     while spot > 0:
                         delay = random.randint(0, ramp_up*2)
                         time.sleep(delay)
