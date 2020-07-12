@@ -53,7 +53,14 @@ def alignedslice():
         del pre_image_bin
         
         tmp_arr = np.array(im) 
-        tmp_arr = (exposure.equalize_adapthist(tmp_arr, kernel_size=1024) * 255).astype(np.uint8) 
+        del im
+        height2, width2 = tmp_arr.shape
+        #overlap = 300 # TODO: add overlap
+        for itery in range(0, height2, height2//4 + 1):
+            for iterx in range(0, width2, width2//4 + 1):
+                tmp_arr[itery:(itery + height2//4+1), iterx:(iterx + width2//4 + 1)] = (exposure.equalize_adapthist(tmp_arr[itery:(itery + height2//4+1), iterx:(iterx + width2//4 + 1)], kernel_size=1024) * 255).astype(np.uint8) 
+        #tmp_arr = (exposure.equalize_adapthist(tmp_arr, kernel_size=1024) * 255).astype(np.uint8) 
+        
         im = Image.fromarray(tmp_arr)
         del tmp_arr 
 
@@ -333,7 +340,7 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw, res):
                 "scales" : [
                     {
                         "chunk_sizes" : [
-                            [ 256, 256, 256 ]
+                            [ 128, 128, 128 ]
                             ],
                         "encoding" : "raw",
                         "key" : f"{res}.0x{res}.0x{res}.0",
