@@ -1,0 +1,9 @@
+[
+    {
+      "origin": ["*"],
+      "responseHeader": ["Content-Length", "Content-Type", "Date", "Range", "Server", "Transfer-Encoding", "X-GUploader-UploadID", "X-Google-Trace"],
+      "method": ["GET", "HEAD", "OPTIONS", "POST"],
+      "maxAgeSeconds": 3600
+    }
+]
+
