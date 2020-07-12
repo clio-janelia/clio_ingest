@@ -236,7 +236,7 @@ def ngshard():
             thread.join()
     
         # write grayscale for each level
-        num_levels = 5
+        num_levels = 6
         start = (tile_chunk[0]*shard_size, tile_chunk[1]*shard_size, zstart)
 
         # put in fortran order

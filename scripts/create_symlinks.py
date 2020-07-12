@@ -11,7 +11,10 @@ To copy a set of images (for example the first 1000) to gbucket:
 % gsutil -m cp img.00[0-9][0-9][0-9].png gs://<bucket>/raw/
 
 note: GOOGLE_APPLICATION_CREDENTIALS should be set and gsutil config
-run first with the correct project id.
+run first with the correct project id.  It makes sense to use a very
+powerful machine with a lot of memory and network bandwidth, which should
+allow 1GB/s to be transferred.  Parallel writes on different machines
+on different image ranges is another option.
 """
 
 import sys
