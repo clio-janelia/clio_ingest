@@ -209,8 +209,8 @@ class CloudRunBatchOperator(BaseOperator):
                                     break
 
                             if self.log_response:
-                                self.log.info(final_resp) 
-
+                                self.log.info(f"task: {id} {final_resp}") 
+                            
                             # save result if there is a failure
                             if self.cache != "" and not cached_result:
                                 self.serialize_results(self.cache, str(id), final_resp)
@@ -248,7 +248,8 @@ class CloudRunBatchOperator(BaseOperator):
             raise failure
 
         if self.xcom_push_flag:
-            return results
+            self.serialize_results(self.cache, f"worker-{self.worker_id}", json.dumps(results))
+            #return results
 
 
     def serialize_results(self, dir, loc, res):

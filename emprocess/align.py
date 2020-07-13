@@ -96,7 +96,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         )
     """
 
-    def collect_affine(temp_location, **context):
+    def collect_affine(temp_location, bucket_name, **context):
         """Create transform arrays for each image and global bbox.
 
         Note: the computation is very straighforward matrix multiplication.  No
@@ -163,8 +163,16 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         global_bbox = None
     
         all_results = {}
+        ghook = GoogleCloudStorageHook() # uses default gcp connection
+        client = ghook.get_conn()
+        bucket = client.bucket(bucket_name)
+
         for worker_id in range(0, NUM_WORKERS):
-            res = context['task_instance'].xcom_pull(task_ids=f"{name}.affine_{worker_id}")
+            blob = bucket.blob(blob_name=f"align/affine_cache/worker-{worker_id}")
+            # raises error if not found
+            res = json.loads(blob.download_as_string().decode())
+
+            #res = context['task_instance'].xcom_pull(task_ids=f"{name}.affine_{worker_id}")
             all_results.update(res)
 
         for slice in range(minz, maxz):
@@ -253,7 +261,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         task_id=collect_id,
         python_callable=collect_affine,
         provide_context=True,
-        op_kwargs={'temp_location': "{{ dag_run.conf['source'] }}" + "_" + "{{ ds_nodash }}"},
+        op_kwargs={'temp_location': "{{ dag_run.conf['source'] }}" + "_" + "{{ ds_nodash }}", "bucket_name": "{{ dag_run.conf['source'] }}"},
         dag=dag,
     )
  
@@ -362,7 +370,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             endpoint="",
             headers=headers,
             log_response=True,
-            num_http_tries=4,
+            num_http_tries=8,
             xcom_push=True,
             cache="gs://" + "{{ dag_run.conf['source'] }}" + "/align/affine_cache" if not TEST_MODE else "",
             validate_output=validate_output,
@@ -392,7 +400,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             headers=headers,
             log_response=False,
             cache="gs://" + "{{ dag_run.conf['source'] }}" + "/align/write_cache" if not TEST_MODE else "",
-            num_http_tries=4,
+            num_http_tries=8,
             xcom_push=False,
             try_number = "{{ task_instance.try_number }}",
             pool=pool,
