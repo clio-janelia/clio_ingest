@@ -28,6 +28,8 @@ app = Flask(__name__)
 CORS(app)
 logger = logging.getLogger(__name__)
 
+MAX_IMAGE_SIZE = 4096
+
 @app.route('/alignedslice', methods=["POST"])
 def alignedslice():
     """Read images storeed in bucket/raw/image, apply the affine transformation
@@ -49,76 +51,100 @@ def alignedslice():
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob("raw/" + name)
         pre_image_bin = blob.download_as_string()
-        im = Image.open(io.BytesIO(pre_image_bin))
-        del pre_image_bin
-        
-        tmp_arr = np.array(im) 
-        del im
-        height2, width2 = tmp_arr.shape
-        #overlap = 300 # TODO: add overlap
-        for itery in range(0, height2, height2//4 + 1):
-            for iterx in range(0, width2, width2//4 + 1):
-                tmp_arr[itery:(itery + height2//4+1), iterx:(iterx + width2//4 + 1)] = (exposure.equalize_adapthist(tmp_arr[itery:(itery + height2//4+1), iterx:(iterx + width2//4 + 1)], kernel_size=1024) * 255).astype(np.uint8) 
-        #tmp_arr = (exposure.equalize_adapthist(tmp_arr, kernel_size=1024) * 255).astype(np.uint8) 
-        
-        im = Image.fromarray(tmp_arr)
-        del tmp_arr 
-
-        #pre_image = numpy.asarray(im)
+        curr_im = Image.open(io.BytesIO(pre_image_bin))
         
         # modify affine to satisfy the pil transform interface
         # (origin should be center -- not the case actually, row1 then row2, and use inverse affine
         # since transform implements a pull transform and not a push transform).
-
-        # modify trans x and trans y
-        #affine_trans[4] += (width/2)
-        #affine_trans[5] += (height/2)
-
         # create affine matrix and invert
         affine_mat = np.array([[affine_trans[0], affine_trans[2], affine_trans[4]],
                 [affine_trans[1], affine_trans[3], affine_trans[5]],
                 [0, 0, 1]])
         mat_inv = np.linalg.inv(affine_mat)
-        post_im = im.transform((width, height), Image.AFFINE, data=mat_inv.flatten()[:6], resample=Image.BICUBIC)
-
-        # write aligned png
+        curr_im = curr_im.transform((width, height), Image.AFFINE, data=mat_inv.flatten()[:6], resample=Image.BICUBIC)
+         
+        # write aligned png as a much smaller thumbnail
+        # (mostly for debugging or quick viewing in something like fiji)
         blob = bucket.blob("align/" + name)
+        TARGET_SIZE = 4096
         with io.BytesIO() as output:
-            post_im.save(output, format="PNG")
+            max_dim = max(width, height)
+            factor = 1
+            while max_dim > TARGET_SIZE:
+                max_dim = max_dim // 2
+                factor *= 2
+            im_small = curr_im
+            if factor > 1:
+                im_small = curr_im.resize((width//factor, height//factor), resample=Image.BICUBIC)
+            
+            # normalize image (even though potentially downsampled heavily)
+            im_small = Image.fromarray((exposure.equalize_adapthist(np.array(im_small), kernel_size=1024)*255).astype(np.uint8))
+        
+            # write output to bucket
+            im_small.save(output, format="PNG")
             blob.upload_from_string(output.getvalue(), content_type="image/png")
 
-        # write temp png tiles
-        post_array = np.array(post_im)
-        binary_volume = "".encode()
-        sizes = []
-        for chunky in range(0, height, shard_size):
-            for chunkx in range(0, width, shard_size):
-                tile = post_array[chunky:(chunky+shard_size), chunkx:(chunkx+shard_size)]
-                tile_bytes_io = io.BytesIO()
-                # save as png
-                tile_im = Image.fromarray(tile)
-                tile_im.save(tile_bytes_io, format="PNG")
-                tile_bytes = tile_bytes_io.getvalue()
+        NUM_THREADS = 4
+        # write sub-image into tile chunks (group together to reduce IO)
+        # TODO: add overlap betwen tiles for CLAHE calculation
+        failure = None
+        def write_sub_image_tiles(thread_id):
+            nonlocal failure
+            try:
+                storage_client = storage.Client()
+                bucket = storage_client.bucket(bucket_name)
+                # write temp png tiles
+                job_id = -1
+                
+                for starty in range(0, height, MAX_IMAGE_SIZE):
+                    for startx in range(0, width, MAX_IMAGE_SIZE):
+                        # determine which thread gets the job
+                        job_id += 1
+                        if (job_id % NUM_THREADS) != thread_id:
+                            continue
 
-                sizes.append(len(tile_bytes))
-                binary_volume += tile_bytes
+                        binary_volume = "".encode()
+                        sizes = []
+                        for chunky in range(starty, min(starty+MAX_IMAGE_SIZE, height), shard_size):
+                            for chunkx in range(startx, min(startx+MAX_IMAGE_SIZE, width), shard_size):
+                                tile = np.array(curr_im.crop((chunkx, chunky, chunkx+shard_size, chunky+shard_size)))
+                                tile = (exposure.equalize_adapthist(tile, kernel_size=1024)*255).astype(np.uint8)
+                                tile_bytes_io = io.BytesIO()
+                                # save as png
+                                tile_im = Image.fromarray(tile)
+                                tile_im.save(tile_bytes_io, format="PNG")
+                                tile_bytes = tile_bytes_io.getvalue()
 
-        # pack binary
-        final_binary = width.to_bytes(8, byteorder="little")
-        final_binary += height.to_bytes(8, byteorder="little")
-        final_binary += shard_size.to_bytes(8, byteorder="little")
+                                sizes.append(len(tile_bytes))
+                                binary_volume += tile_bytes
 
-        start_pos = 24 + (len(sizes)+1)*8
-        final_binary += start_pos.to_bytes(8, byteorder="little")
-        for val in sizes:
-            start_pos += val
-            final_binary += start_pos.to_bytes(8, byteorder="little")
-        final_binary += binary_volume
+                        # pack binary
+                        final_binary = width.to_bytes(8, byteorder="little")
+                        final_binary += height.to_bytes(8, byteorder="little")
+                        final_binary += shard_size.to_bytes(8, byteorder="little")
 
-        # write to cloud
-        bucket_temp = storage_client.bucket(bucket_name_temp)
-        blob = bucket_temp.blob(str(slicenum))
-        blob.upload_from_string(final_binary, content_type="application/octet-stream")
+                        start_pos = 24 + (len(sizes)+1)*8
+                        final_binary += start_pos.to_bytes(8, byteorder="little")
+                        for val in sizes:
+                            start_pos += val
+                            final_binary += start_pos.to_bytes(8, byteorder="little")
+                        final_binary += binary_volume
+
+                        # write to cloud
+                        bucket_temp = storage_client.bucket(bucket_name_temp)
+                        blob = bucket_temp.blob(f"{slicenum}_{startx//MAX_IMAGE_SIZE}_{starty//MAX_IMAGE_SIZE}")
+                        blob.upload_from_string(final_binary, content_type="application/octet-stream")
+            except Exception as e:
+                failure = e
+        # write superblocks to disk in chunks of MAX_IMAGE_SIZE
+        threads = [threading.Thread(target=write_sub_image_tiles, args=(thread_id,)) for thread_id in range(NUM_THREADS)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        #write_sub_image_tiles(0)
+        if failure is not None:
+            raise failure
 
         r = make_response("success".encode())
         r.headers.set('Content-Type', 'text/html')
@@ -187,15 +213,28 @@ def ngshard():
         bucket_temp = storage_client.bucket(bucket_tiled_name)
         
         vol3d = None
+
+        assert((MAX_IMAGE_SIZE % shard_size) == 0)
         def set_image(slice):
             nonlocal vol3d
+            
+            # x and y block location
+            x_block = (tile_chunk[0]*shard_size) // MAX_IMAGE_SIZE
+            y_block = (tile_chunk[1]*shard_size) // MAX_IMAGE_SIZE
 
+            # setup offsets for finding shards
+            chunk_tile_chunk_0 = ((tile_chunk[0]*shard_size) %  MAX_IMAGE_SIZE) // shard_size
+            chunk_tile_chunk_1 = ((tile_chunk[1]*shard_size) %  MAX_IMAGE_SIZE) // shard_size
+            chunk_width = ceil(min(MAX_IMAGE_SIZE, (width-(tile_chunk[0]*shard_size) ) ) / shard_size)
+
+            # get image block
             blob = bucket_temp.blob(str(slice))
+            blob = bucket_temp.blob(f"{slice}_{x_block}_{y_block}")
             
             # read offset binary
             pre = 24 # start of index
         
-            spot = tile_chunk[1]*(ceil(width/shard_size)) + tile_chunk[0]
+            spot = chunk_tile_chunk_1*chunk_width + chunk_tile_chunk_0
             start_index = pre + spot * 8
             end_index = start_index + 16 - 1
 
