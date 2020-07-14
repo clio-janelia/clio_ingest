@@ -173,12 +173,13 @@ class CloudRunBatchOperator(BaseOperator):
                             success = False
                             while not success and num_tries < self.num_http_tries:
                                 # reset token if expired
-                                if (time.time() - start_time) >  TOKEN_TIMEOUT:
+                                if (time.time() - start_time) > TOKEN_TIMEOUT:
                                     start_time = time.time()
                                     # set token if expired
                                     # extract auth token from gcloud
                                     try:
                                         token = subprocess.check_output(["gcloud auth print-identity-token"], shell=True).decode()
+                                        self.log.info("setting token")
                                         headers["Authorization"] = f"Bearer {token[:-1]}"
                                     except Exception:
                                         pass
@@ -189,7 +190,7 @@ class CloudRunBatchOperator(BaseOperator):
                                     response = http.run(
                                                 self.endpoint,
                                                 params,
-                                                self.headers,
+                                                headers,
                                                 {"timeout": CLOUDRUN_TIMEOUT}
                                                 )
                                     self.log.info(f"(thread {thread_id}) completed call {id}") 

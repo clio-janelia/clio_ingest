@@ -331,12 +331,11 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         dest_tmp = data["dest-tmp"]
         shard_size = data["shard-size"]
         
+        bbox_val = json.dumps(context["task_instance"].xcom_pull(task_ids=collect_id, key="bbox"))
         task_list = []
         for slice in range(minz, maxz+1):
             if (slice % num_workers) == worker_id:
                 transform_val = json.dumps(context["task_instance"].xcom_pull(task_ids=collect_id, key=str(slice)))
-                bbox_val = json.dumps(context["task_instance"].xcom_pull(task_ids=collect_id, key="bbox"))
-        
                 params = {
                         "img": image % slice,
                         "transform": transform_val, 

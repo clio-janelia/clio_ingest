@@ -319,6 +319,9 @@ def ngshard():
                     for ziter in range(0, z, 256):
                         target[(xiter//2):((xiter+256)//2), (yiter//2):((yiter+256)//2), (ziter//2):((ziter+256)//2)] = ndimage.interpolation.zoom(vol[xiter:(xiter+256),yiter:(yiter+256),ziter:(ziter+256)], 0.5, order=1)
             return target 
+        
+        #storage_client2 = storage.Client()
+        #bucket = storage_client2.bucket(bucket_name)
 
         for level in range(num_levels):
             if level == 0:
@@ -336,6 +339,14 @@ def ngshard():
                             
                             dataset_jpeg = _write_shard(level, start_temp, vol3d_temp, "jpeg", dataset_jpeg)
                             if write_raw:
+                                # zoffset is not correctly set !!
+                                #blob = bucket.blob(f"chunks/{start[0]}-{start[0]+512}_{start[1]}-{start[1]+512}_{start[2]}-{start[2]+512}")
+                                #tarr = np.zeros((512, 512, 512), dtype=np.uint8)
+                                #tarr[0:vol3d_temp.shape[0], 0:vol3d_temp.shape[1], 0:vol3d_temp.shape[2]] = vol3d_temp
+
+                                #blob.upload_from_string(tarr.tostring(), content_type="application/octet-stream")
+                                 
+
                                 dataset_raw = _write_shard(level, start_temp, vol3d_temp, "raw", dataset_raw)
             else:
                 _write_shard(level, start, vol3d, "jpeg")
