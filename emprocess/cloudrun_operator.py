@@ -87,7 +87,7 @@ class CloudRunBatchOperator(BaseOperator):
 
     def execute(self, context):
         CLOUDRUN_TIMEOUT = 901 # force termination if request hangs
-        TOKEN_TIMEOUT = 3000 # how often to refresh token
+        TOKEN_TIMEOUT = 1800 # how often to refresh token
 
         self.try_number = int(self.try_number)
         # generate mini tasks
@@ -120,6 +120,9 @@ class CloudRunBatchOperator(BaseOperator):
         remaining_threads = self.num_threads
         num_workers = self.num_workers
 
+        if len(mini_tasks) > 0:
+            self.log.info(f"Params: {json.dumps(mini_tasks[0])}")
+
         def run_query(thread_id):
             nonlocal failure
             nonlocal remaining_threads
@@ -144,7 +147,7 @@ class CloudRunBatchOperator(BaseOperator):
                         break # exit thread if a failure is detected
                     if (idx % self.num_threads) == thread_id:
                         params = json.dumps(task)
-                        self.log.info(f"(thread {thread_id}) http params {id}: {params}") 
+                        self.log.info(f"(thread {thread_id}) start http {id}") 
 
                         final_resp = None
                         cached_result = False
