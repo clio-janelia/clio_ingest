@@ -52,7 +52,8 @@ def alignedslice():
         blob = bucket.blob("raw/" + name)
         pre_image_bin = blob.download_as_string()
         curr_im = Image.open(io.BytesIO(pre_image_bin))
-        
+        del pre_image_bin
+
         # modify affine to satisfy the pil transform interface
         # (origin should be center -- not the case actually, row1 then row2, and use inverse affine
         # since transform implements a pull transform and not a push transform).
