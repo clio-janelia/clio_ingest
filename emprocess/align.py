@@ -228,16 +228,21 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
 
         # push results for each image and create csv of transforms
         affines_csv = ""
+        transforms_out = {}
         for slice in range(minz, maxz+1):
             curr_affine = transforms[slice-minz]
             curr_affine[4] = curr_affine[4]-global_bbox[0] # shift by min x
             curr_affine[5] = curr_affine[5]-global_bbox[2] # shift by min y
-            context['task_instance'].xcom_push(key=f"{slice}", value=curr_affine)
+            transforms_out[slice] = curr_affine 
+             
+            if TEST_MODE: # sending the data via xcom is slow when there are a lot of slices
+                context['task_instance'].xcom_push(key=f"{slice}", value=curr_affine)
             affines_csv += f"{slice} , '{curr_affine}'\n"
 
         logging.info([global_bbox[1]-global_bbox[0], global_bbox[3]-global_bbox[2]])
         # push bbox for new image size
         context['task_instance'].xcom_push(key="bbox", value=[global_bbox[1]-global_bbox[0], global_bbox[3]-global_bbox[2]])
+
         # test mode disable
         if not TEST_MODE:
             # write transforms to align/tranforms.csv
@@ -246,7 +251,11 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             bucket = client.bucket(source)
             blob = bucket.blob(blob_name="align/transforms.csv")
             blob.upload_from_string(affines_csv) 
-            
+           
+            # write the json parseable transforms to align/transforms.json
+            blob = bucket.blob(blob_name="align/transforms.json")
+            blob.upload_from_string(json.dumps(transforms_out)) 
+
             # create bucket for temporary images
             try:
                 ghook.create_bucket(bucket_name=temp_location, project_id=project_id)
@@ -330,12 +339,29 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         collect_id = data["collect_id"]
         dest_tmp = data["dest-tmp"]
         shard_size = data["shard-size"]
-        
+        bucket_name = data["bucket_name"]
+
         bbox_val = json.dumps(context["task_instance"].xcom_pull(task_ids=collect_id, key="bbox"))
+       
+        transform_vals = {}
+        # fetch data from google storage
+        if not TEST_MODE:
+            ghook = GoogleCloudStorageHook() # uses default gcp connection
+            client = ghook.get_conn()
+            bucket = client.bucket(bucket_name)
+            blob = bucket.blob(blob_name="align/transforms.json")
+            trans_str = blob.download_as_string().decode() 
+            transform_vals = json.loads(trans_str)
+
         task_list = []
         for slice in range(minz, maxz+1):
             if (slice % num_workers) == worker_id:
-                transform_val = json.dumps(context["task_instance"].xcom_pull(task_ids=collect_id, key=str(slice)))
+                if TEST_MODE:
+                    # slow with many slices
+                    transform_val = json.dumps(context["task_instance"].xcom_pull(task_ids=collect_id, key=str(slice)))
+                else:
+                    transform_val = json.dumps(transform_vals[str(slice)])
+
                 params = {
                         "img": image % slice,
                         "transform": transform_val, 
@@ -392,7 +418,8 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
                     "image": "{{ dag_run.conf['image'] }}",
                     "dest-tmp": "{{ dag_run.conf['source'] }}" + "_" + "{{ ds_nodash }}",
                     "shard-size": SHARD_SIZE,
-                    "collect_id": collect_id
+                    "collect_id": collect_id,
+                    "bucket_name": "{{ dag_run.conf['source'] }}"
             },
             conn_id="IMG_WRITE",
             endpoint="/alignedslice",

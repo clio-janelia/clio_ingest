@@ -226,7 +226,9 @@ def ngshard():
             # setup offsets for finding shards
             chunk_tile_chunk_0 = ((tile_chunk[0]*shard_size) %  MAX_IMAGE_SIZE) // shard_size
             chunk_tile_chunk_1 = ((tile_chunk[1]*shard_size) %  MAX_IMAGE_SIZE) // shard_size
-            chunk_width = ceil(min(MAX_IMAGE_SIZE, (width-(tile_chunk[0]*shard_size) ) ) / shard_size)
+            chunk_width = MAX_IMAGE_SIZE // shard_size
+            if (width - x_block*MAX_IMAGE_SIZE) < MAX_IMAGE_SIZE:
+                chunk_width = ceil((width - x_block*MAX_IMAGE_SIZE) / shard_size)
 
             # get image block
             blob = bucket_temp.blob(str(slice))
@@ -325,19 +327,19 @@ def ngshard():
 
         for level in range(num_levels):
             if level == 0:
-                # iterate through different 512 cubes since 1024 will not fit in memory
+                # iterate through different 256 cubes since 1024 will not fit in memory
                 dataset_jpeg = None
                 dataset_raw = None
-                for iterz in range(0, 1024, 512):
-                    for itery in range(0, 1024, 512):
-                        for iterx in range(0, 1024, 512):
-                            vol3d_temp = vol3d[iterx:(iterx+512), itery:(itery+512), iterz:(iterz+512)]
+                for iterz in range(0, 1024, 256):
+                    for itery in range(0, 1024, 256):
+                        for iterx in range(0, 1024, 256):
+                            vol3d_temp = vol3d[iterx:(iterx+256), itery:(itery+256), iterz:(iterz+256)]
                             currsize = vol3d_temp.shape
                             if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
                                 continue
                             start_temp = (start[0]+iterx, start[1]+itery, start[2]+iterz) 
                             
-                            dataset_jpeg = _write_shard(level, start_temp, vol3d_temp, "jpeg", dataset_jpeg)
+                            _write_shard(level, start_temp, vol3d_temp, "jpeg", dataset_jpeg)
                             if write_raw:
                                 # zoffset is not correctly set !!
                                 #blob = bucket.blob(f"chunks/{start[0]}-{start[0]+512}_{start[1]}-{start[1]+512}_{start[2]}-{start[2]+512}")
@@ -347,7 +349,7 @@ def ngshard():
                                 #blob.upload_from_string(tarr.tostring(), content_type="application/octet-stream")
                                  
 
-                                dataset_raw = _write_shard(level, start_temp, vol3d_temp, "raw", dataset_raw)
+                                _write_shard(level, start_temp, vol3d_temp, "raw", dataset_raw)
             else:
                 _write_shard(level, start, vol3d, "jpeg")
 
