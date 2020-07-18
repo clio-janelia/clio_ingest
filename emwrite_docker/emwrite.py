@@ -324,7 +324,7 @@ def ngshard():
         vol3d = None
 
         assert((MAX_IMAGE_SIZE % shard_size) == 0)
-        def set_image(slice):
+        def set_image(slice, zstart, zfinish):
             nonlocal vol3d
             
             # x and y block location
@@ -368,29 +368,14 @@ def ngshard():
                 vol3d = np.zeros((zfinish-zstart+1, height2, width2), dtype=np.uint8)
             vol3d[(slice-zstart), :, :] = img_array
         
-        # sest first image
-        set_image(zstart)
+        # number of downsample levels
+        num_levels = 6
 
         # fetch 1024x1024 tile from each imagee
         def set_images(start, finish, thread_id, num_threads):
             for slice in range(start, finish+1):
                 if (slice % num_threads) == thread_id:
-                    set_image(slice)
-
-        # use 20 threads in parallel to fetch
-        num_threads = 20
-        threads = [threading.Thread(target=set_images, args=(zstart+1, zfinish, thread_id, num_threads)) for thread_id in range(num_threads)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-    
-        # write grayscale for each level
-        num_levels = 6
-        start = (tile_chunk[0]*shard_size, tile_chunk[1]*shard_size, zstart)
-
-        # put in fortran order
-        vol3d = vol3d.transpose((2,1,0))
+                    set_image(slice, start, finish)
 
         def _write_shard(level, start, vol3d, format, dataset=None):
             """Method to write shard through tensorstore.
@@ -430,44 +415,70 @@ def ngshard():
                         target[(xiter//2):((xiter+256)//2), (yiter//2):((yiter+256)//2), (ziter//2):((ziter+256)//2)] = ndimage.interpolation.zoom(vol[xiter:(xiter+256),yiter:(yiter+256),ziter:(ziter+256)], 0.5, order=1)
             return target 
         
-        #storage_client2 = storage.Client()
-        #bucket = storage_client2.bucket(bucket_name)
+        ####### Iterate 512 slices at a time ########
+        glb_zstart = zstart
+        glb_zfinish = zfinish
 
-        for level in range(num_levels):
-            if level == 0:
-                # iterate through different 256 cubes since 1024 will not fit in memory
-                dataset_jpeg = None
-                dataset_raw = None
-                for iterz in range(0, 1024, 256):
-                    for itery in range(0, 1024, 256):
-                        for iterx in range(0, 1024, 256):
-                            vol3d_temp = vol3d[iterx:(iterx+256), itery:(itery+256), iterz:(iterz+256)]
-                            currsize = vol3d_temp.shape
-                            if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
-                                continue
-                            start_temp = (start[0]+iterx, start[1]+itery, start[2]+iterz) 
-                            
-                            _write_shard(level, start_temp, vol3d_temp, "jpeg", dataset_jpeg)
-                            if write_raw:
-                                # zoffset is not correctly set !!
-                                #blob = bucket.blob(f"chunks/{start[0]}-{start[0]+512}_{start[1]}-{start[1]+512}_{start[2]}-{start[2]+512}")
-                                #tarr = np.zeros((512, 512, 512), dtype=np.uint8)
-                                #tarr[0:vol3d_temp.shape[0], 0:vol3d_temp.shape[1], 0:vol3d_temp.shape[2]] = vol3d_temp
+        for zstart in range(glb_zstart, glb_zfinish+1, 512):
+            zfinish = zstart + 512 - 1
+            if zfinish > glb_finish:
+                zfinish = glb_finish
 
-                                #blob.upload_from_string(tarr.tostring(), content_type="application/octet-stream")
-                                 
+            # set first image
+            set_image(zstart, zstart, zfinish)
 
-                                _write_shard(level, start_temp, vol3d_temp, "raw", dataset_raw)
-            else:
-                _write_shard(level, start, vol3d, "jpeg")
+            # use 20 threads in parallel to fetch
+            num_threads = 20
+            threads = [threading.Thread(target=set_images, args=(zstart+1, zfinish, thread_id, num_threads)) for thread_id in range(num_threads)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        
+            # write grayscale for each level
+            start = (tile_chunk[0]*shard_size, tile_chunk[1]*shard_size, zstart)
 
-            # downsample
-            #vol3d = ndimage.interpolation.zoom(vol3d, 0.5)
-            vol3d = _downsample(vol3d)
-            start = (start[0]//2, start[1]//2, start[2]//2)
-            currsize = vol3d.shape
-            if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
-                break
+            # put in fortran order
+            vol3d = vol3d.transpose((2,1,0))
+
+            #storage_client2 = storage.Client()
+            #bucket = storage_client2.bucket(bucket_name)
+
+            for level in range(num_levels):
+                if level == 0:
+                    # iterate through different 256 cubes since 1024 will not fit in memory
+                    dataset_jpeg = None
+                    dataset_raw = None
+                    for iterz in range((zstart-glb_zstart), (zstart-glb_zstart) + 512, 256):
+                        for itery in range(0, 1024, 256):
+                            for iterx in range(0, 1024, 256):
+                                vol3d_temp = vol3d[iterx:(iterx+256), itery:(itery+256), iterz:(iterz+256)]
+                                currsize = vol3d_temp.shape
+                                if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
+                                    continue
+                                start_temp = (start[0]+iterx, start[1]+itery, start[2]+iterz) 
+                                
+                                _write_shard(level, start_temp, vol3d_temp, "jpeg", dataset_jpeg)
+                                if write_raw:
+                                    # zoffset is not correctly set !!
+                                    #blob = bucket.blob(f"chunks/{start[0]}-{start[0]+512}_{start[1]}-{start[1]+512}_{start[2]}-{start[2]+512}")
+                                    #tarr = np.zeros((512, 512, 512), dtype=np.uint8)
+                                    #tarr[0:vol3d_temp.shape[0], 0:vol3d_temp.shape[1], 0:vol3d_temp.shape[2]] = vol3d_temp
+
+                                    #blob.upload_from_string(tarr.tostring(), content_type="application/octet-stream")
+                                     
+
+                                    _write_shard(level, start_temp, vol3d_temp, "raw", dataset_raw)
+                else:
+                    _write_shard(level, start, vol3d, "jpeg")
+
+                # downsample
+                #vol3d = ndimage.interpolation.zoom(vol3d, 0.5)
+                vol3d = _downsample(vol3d)
+                start = (start[0]//2, start[1]//2, start[2]//2)
+                currsize = vol3d.shape
+                if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
+                    break
 
         r = make_response("success".encode())
         r.headers.set('Content-Type', 'text/html')
