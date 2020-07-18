@@ -342,6 +342,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         bucket_name = data["bucket_name"]
 
         bbox_val = json.dumps(context["task_instance"].xcom_pull(task_ids=collect_id, key="bbox"))
+        bbox = json.loads(bbox_val)
        
         transform_vals = {}
         # fetch data from google storage
@@ -371,7 +372,24 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
                         "shard-size": shard_size,
                         "dest": dest
                 }        
-                task_list.append([slice, params])
+                task_list.append([f"{slice}", params])
+
+                """
+                # split into super tiles of 8192 
+                for stx in range(0, bbox[0], 8192):
+                    for sty in range(0, bbox[1], 8192): 
+                        params = {
+                                "img": image % slice,
+                                "transform": transform_val, 
+                                "bbox": bbox_val, 
+                                "dest-tmp": dest_tmp,
+                                "slice": slice,
+                                "shard-size": shard_size,
+                                "super-tile-chunk": [stx//8192, sty//8192],
+                                "dest": dest
+                        }        
+                        task_list.append([f"{slice}_{stx}_{sty}", params])
+                """
         return task_list
 
 

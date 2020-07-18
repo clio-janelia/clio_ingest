@@ -147,6 +147,7 @@ class CloudRunBatchOperator(BaseOperator):
                         break # exit thread if a failure is detected
                     if (idx % self.num_threads) == thread_id:
                         params = json.dumps(task)
+                        #self.log.info(f"(thread {thread_id}) start http {id} {params}") 
                         self.log.info(f"(thread {thread_id}) start http {id}") 
 
                         final_resp = None

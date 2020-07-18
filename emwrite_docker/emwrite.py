@@ -18,6 +18,14 @@ import io
 import traceback
 import threading
 from skimage import exposure
+import gc
+
+
+import psutil
+from datetime import datetime
+def profile(tag):
+    mem = str(psutil.virtual_memory())
+    return f"{tag}: {mem} {datetime.now()}\n"
 
 # allow very large images to be read (up to 1 gigavoxel)
 Image.MAX_IMAGE_PIXELS = 1000000000
@@ -29,6 +37,11 @@ CORS(app)
 logger = logging.getLogger(__name__)
 
 MAX_IMAGE_SIZE = 4096
+MAX_SUPERIMAGE_SIZE = 12288
+OVERLAP_SIZE = 512
+
+# modify clahe to return re-scaled 16 bit image
+#exposure._adapthist.img_as_float = lambda x: x
 
 @app.route('/alignedslice', methods=["POST"])
 def alignedslice():
@@ -37,7 +50,29 @@ def alignedslice():
     """
     try:
         config_file  = request.get_json()
-        
+
+        def clahe(im, pad_x0, pad_x1, pad_y0, pad_y1):
+            im = np.array(im)
+            gc.collect()
+
+            # tile size
+            CLAHE_SIZE = 3072
+            h, w = im.shape
+            target = np.zeros_like(im)
+
+            for y in range(pad_y0, h-pad_y1, CLAHE_SIZE):
+                for x in range(pad_x0, w-pad_x1, CLAHE_SIZE):
+                    ystart = max(0, y-OVERLAP_SIZE)
+                    xstart = max(0, x-OVERLAP_SIZE)
+                    im_sub = (exposure.equalize_adapthist(im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)], kernel_size = 1024)*255).astype(np.uint8)
+                    ys, xs = im_sub.shape
+                    target[ystart:(ystart+ys), xstart:(xstart+xs)] = im_sub
+
+            im = Image.fromarray(target)
+            del target
+            gc.collect()
+            return im
+
         name = config_file["img"] 
         bucket_name = config_file["dest"] # contains source and destination
         bucket_name_temp = config_file["dest-tmp"] # destination for tiles
@@ -54,17 +89,7 @@ def alignedslice():
         curr_im = Image.open(io.BytesIO(pre_image_bin))
         del pre_image_bin
 
-        # modify affine to satisfy the pil transform interface
-        # (origin should be center -- not the case actually, row1 then row2, and use inverse affine
-        # since transform implements a pull transform and not a push transform).
-        # create affine matrix and invert
-        affine_mat = np.array([[affine_trans[0], affine_trans[2], affine_trans[4]],
-                [affine_trans[1], affine_trans[3], affine_trans[5]],
-                [0, 0, 1]])
-        mat_inv = np.linalg.inv(affine_mat)
-        curr_im = curr_im.transform((width, height), Image.AFFINE, data=mat_inv.flatten()[:6], resample=Image.BICUBIC)
-         
-        # write aligned png as a much smaller thumbnail
+        # make small thumbnail for first tile or only tile
         # (mostly for debugging or quick viewing in something like fiji)
         blob = bucket.blob("align/" + name)
         TARGET_SIZE = 4096
@@ -77,75 +102,158 @@ def alignedslice():
             im_small = curr_im
             if factor > 1:
                 im_small = curr_im.resize((width//factor, height//factor), resample=Image.BICUBIC)
+           
+            affine_mat = np.array([[affine_trans[0], affine_trans[2], affine_trans[4]//factor],
+            [affine_trans[1], affine_trans[3], affine_trans[5]//factor],
+            [0, 0, 1]])
+            mat_inv = np.linalg.inv(affine_mat)
+            im_small = im_small.transform((width//factor, height//factor), Image.AFFINE, data=mat_inv.flatten()[:6], resample=Image.BICUBIC, fillcolor=0)
             
+        
             # normalize image (even though potentially downsampled heavily)
-            im_small = Image.fromarray((exposure.equalize_adapthist(np.array(im_small), kernel_size=1024)*255).astype(np.uint8))
+            
+            im_small = clahe(im_small, 0, 0, 0, 0) 
+            #im_small = Image.fromarray((exposure.equalize_adapthist(np.array(im_small), kernel_size=1024)*255).astype(np.uint8))
         
             # write output to bucket
             im_small.save(output, format="PNG")
             blob.upload_from_string(output.getvalue(), content_type="image/png")
+        
+        ####### Iterate per super tile chunk #######
 
-        NUM_THREADS = 4
-        # write sub-image into tile chunks (group together to reduce IO)
-        # TODO: add overlap betwen tiles for CLAHE calculation
-        failure = None
-        def write_sub_image_tiles(thread_id):
-            nonlocal failure
-            try:
-                storage_client = storage.Client()
-                bucket = storage_client.bucket(bucket_name)
-                # write temp png tiles
-                job_id = -1
+        #super_tile_chunk = config_file["super-tile-chunk"]
+        super_tile_chunks = []
+        for itery in range(0, height, MAX_SUPERIMAGE_SIZE):
+            for iterx in range(0, width, MAX_SUPERIMAGE_SIZE):
+                super_tile_chunks.append([iterx//MAX_SUPERIMAGE_SIZE, itery//MAX_SUPERIMAGE_SIZE])
+        orig_width, orig_height = width, height
+        master_im = curr_im
+        orig_affine_trans = affine_trans.copy()
+
+        for super_tile_chunk in super_tile_chunks:
+            # modify width and heigh if tiled
+            startx = starty = trail_x = trail_y = 0
+            curr_im = master_im
+            width, height = orig_width, orig_height
+            affine_trans = orig_affine_trans.copy()
+
+            # new width and height
+            if width > (MAX_SUPERIMAGE_SIZE):
+                width = width - super_tile_chunk[0]*MAX_SUPERIMAGE_SIZE
+
+                # add buffer if needed
+                if width > MAX_SUPERIMAGE_SIZE:
+                    width = MAX_SUPERIMAGE_SIZE + OVERLAP_SIZE
+                    trail_x = OVERLAP_SIZE
                 
-                for starty in range(0, height, MAX_IMAGE_SIZE):
-                    for startx in range(0, width, MAX_IMAGE_SIZE):
-                        # determine which thread gets the job
-                        job_id += 1
-                        if (job_id % NUM_THREADS) != thread_id:
-                            continue
+                width += OVERLAP_SIZE
+                startx = OVERLAP_SIZE
+                affine_trans[4] -= (super_tile_chunk[0]*MAX_SUPERIMAGE_SIZE - OVERLAP_SIZE)
 
-                        binary_volume = "".encode()
-                        sizes = []
-                        for chunky in range(starty, min(starty+MAX_IMAGE_SIZE, height), shard_size):
-                            for chunkx in range(startx, min(startx+MAX_IMAGE_SIZE, width), shard_size):
-                                tile = np.array(curr_im.crop((chunkx, chunky, chunkx+shard_size, chunky+shard_size)))
-                                tile = (exposure.equalize_adapthist(tile, kernel_size=1024)*255).astype(np.uint8)
-                                tile_bytes_io = io.BytesIO()
-                                # save as png
-                                tile_im = Image.fromarray(tile)
-                                tile_im.save(tile_bytes_io, format="PNG")
-                                tile_bytes = tile_bytes_io.getvalue()
+                if width % shard_size != 0:
+                    leftover = (shard_size - (width % shard_size))
+                    width += leftover
+                    trail_x += leftover
 
-                                sizes.append(len(tile_bytes))
-                                binary_volume += tile_bytes
+            if height > (MAX_SUPERIMAGE_SIZE):
+                height = height - super_tile_chunk[1]*MAX_SUPERIMAGE_SIZE
 
-                        # pack binary
-                        final_binary = width.to_bytes(8, byteorder="little")
-                        final_binary += height.to_bytes(8, byteorder="little")
-                        final_binary += shard_size.to_bytes(8, byteorder="little")
+                # add buffer if needed
+                if height > MAX_SUPERIMAGE_SIZE:
+                    height = MAX_SUPERIMAGE_SIZE + OVERLAP_SIZE 
+                    trail_y = OVERLAP_SIZE
+                
+                height += OVERLAP_SIZE
+                starty = OVERLAP_SIZE
+                affine_trans[5] -= (super_tile_chunk[1]*MAX_SUPERIMAGE_SIZE - OVERLAP_SIZE)
+                
+                if height % shard_size != 0:
+                    leftover = (shard_size - (height % shard_size))
+                    height += leftover
+                    trail_y += leftover
 
-                        start_pos = 24 + (len(sizes)+1)*8
-                        final_binary += start_pos.to_bytes(8, byteorder="little")
-                        for val in sizes:
-                            start_pos += val
+            # modify affine to satisfy the pil transform interface
+            # (origin should be center -- not the case actually, row1 then row2, and use inverse affine
+            # since transform implements a pull transform and not a push transform).
+            # create affine matrix and invert
+            affine_mat = np.array([[affine_trans[0], affine_trans[2], affine_trans[4]],
+                    [affine_trans[1], affine_trans[3], affine_trans[5]],
+                    [0, 0, 1]])
+            mat_inv = np.linalg.inv(affine_mat)
+            curr_im = curr_im.transform((width, height), Image.AFFINE, data=mat_inv.flatten()[:6], resample=Image.BICUBIC, fillcolor=0)
+            
+            curr_im = clahe(curr_im, startx, trail_x, starty, trail_y)
+            #curr_im = Image.fromarray((exposure.equalize_adapthist(np.array(curr_im), kernel_size=1024)//255).astype(np.uint8))
+
+            # ?? is result better with single thread, single clahe, single write
+            NUM_THREADS = 4
+            # write sub-image into tile chunks (group together to reduce IO)
+            # TODO: add overlap betwen tiles for CLAHE calculation
+            failure = None
+            def write_sub_image_tiles(thread_id):
+                nonlocal failure
+                try:
+                    storage_client = storage.Client()
+                    bucket = storage_client.bucket(bucket_name)
+                    # write temp png tiles
+                    job_id = -1
+                    
+                    for y in range(starty, (height - trail_y), MAX_IMAGE_SIZE):
+                        for x in range(startx, (width - trail_x), MAX_IMAGE_SIZE):
+                            # determine which thread gets the job
+                            job_id += 1
+                            if (job_id % NUM_THREADS) != thread_id:
+                                continue
+
+                            binary_volume = "".encode()
+                            sizes = []
+                            for chunky in range(y, min(y+MAX_IMAGE_SIZE, height), shard_size):
+                                for chunkx in range(x, min(x+MAX_IMAGE_SIZE, width), shard_size):
+                                    tile = np.array(curr_im.crop((chunkx-OVERLAP_SIZE, chunky-OVERLAP_SIZE, chunkx+shard_size+OVERLAP_SIZE, chunky+shard_size+OVERLAP_SIZE)))
+                                    #tile = (exposure.equalize_adapthist(tile, kernel_size=1024)*255).astype(np.uint8)
+                                    tile = tile[OVERLAP_SIZE:-OVERLAP_SIZE, OVERLAP_SIZE:-OVERLAP_SIZE]
+                                    tile_bytes_io = io.BytesIO()
+                                    # save as png
+                                    tile_im = Image.fromarray(tile)
+                                    tile_im.save(tile_bytes_io, format="PNG")
+                                    tile_bytes = tile_bytes_io.getvalue()
+
+                                    sizes.append(len(tile_bytes))
+                                    binary_volume += tile_bytes
+
+                            # pack binary
+                            final_binary = orig_width.to_bytes(8, byteorder="little")
+                            final_binary += orig_height.to_bytes(8, byteorder="little")
+                            final_binary += shard_size.to_bytes(8, byteorder="little")
+
+                            start_pos = 24 + (len(sizes)+1)*8
                             final_binary += start_pos.to_bytes(8, byteorder="little")
-                        final_binary += binary_volume
+                            for val in sizes:
+                                start_pos += val
+                                final_binary += start_pos.to_bytes(8, byteorder="little")
+                            final_binary += binary_volume
 
-                        # write to cloud
-                        bucket_temp = storage_client.bucket(bucket_name_temp)
-                        blob = bucket_temp.blob(f"{slicenum}_{startx//MAX_IMAGE_SIZE}_{starty//MAX_IMAGE_SIZE}")
-                        blob.upload_from_string(final_binary, content_type="application/octet-stream")
-            except Exception as e:
-                failure = e
-        # write superblocks to disk in chunks of MAX_IMAGE_SIZE
-        threads = [threading.Thread(target=write_sub_image_tiles, args=(thread_id,)) for thread_id in range(NUM_THREADS)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        #write_sub_image_tiles(0)
-        if failure is not None:
-            raise failure
+                            # file offset
+                            xoffset = x // MAX_IMAGE_SIZE
+                            yoffset = y // MAX_IMAGE_SIZE
+                            xoffset = (super_tile_chunk[0] * MAX_SUPERIMAGE_SIZE) // MAX_IMAGE_SIZE + xoffset 
+                            yoffset = (super_tile_chunk[1] * MAX_SUPERIMAGE_SIZE) // MAX_IMAGE_SIZE + yoffset 
+
+                            # write to cloud
+                            bucket_temp = storage_client.bucket(bucket_name_temp)
+                            blob = bucket_temp.blob(f"{slicenum}_{xoffset}_{yoffset}")
+                            blob.upload_from_string(final_binary, content_type="application/octet-stream")
+                except Exception as e:
+                    failure = e
+            # write superblocks to disk in chunks of MAX_IMAGE_SIZE
+            threads = [threading.Thread(target=write_sub_image_tiles, args=(thread_id,)) for thread_id in range(NUM_THREADS)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            #write_sub_image_tiles(0)
+            if failure is not None:
+                raise failure
 
         r = make_response("success".encode())
         r.headers.set('Content-Type', 'text/html')
