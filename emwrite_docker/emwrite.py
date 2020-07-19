@@ -20,7 +20,7 @@ import threading
 from skimage import exposure
 import gc
 
-
+import time
 import psutil
 from datetime import datetime
 def profile(tag):
@@ -246,6 +246,7 @@ def alignedslice():
                             blob.upload_from_string(final_binary, content_type="application/octet-stream")
                 except Exception as e:
                     failure = e
+                    raise
             # write superblocks to disk in chunks of MAX_IMAGE_SIZE
             threads = [threading.Thread(target=write_sub_image_tiles, args=(thread_id,)) for thread_id in range(NUM_THREADS)]
             for thread in threads:
@@ -322,65 +323,88 @@ def ngshard():
         # extract 1024x1024x1024 cube based on tile chunk
         zstart = max(shard_size*tile_chunk[2], minz)
         zfinish = min(maxz, zstart+shard_size-1)
-    
-        storage_client = storage.Client()
-        bucket_temp = storage_client.bucket(bucket_tiled_name)
+
+        #storage_client = storage.Client()
+        #bucket_temp = storage_client.bucket(bucket_tiled_name)
         
         vol3d = None
+        failure = None
 
         assert((MAX_IMAGE_SIZE % shard_size) == 0)
         def set_image(slice, zstart, zfinish):
-            nonlocal vol3d
+            try:
+                nonlocal vol3d
+                nonlocal failure
+                
+                storage_client = storage.Client()
+                bucket_temp = storage_client.bucket(bucket_tiled_name)
+                
+                # x and y block location
+                x_block = (tile_chunk[0]*shard_size) // MAX_IMAGE_SIZE
+                y_block = (tile_chunk[1]*shard_size) // MAX_IMAGE_SIZE
+
+                # setup offsets for finding shards
+                chunk_tile_chunk_0 = ((tile_chunk[0]*shard_size) %  MAX_IMAGE_SIZE) // shard_size
+                chunk_tile_chunk_1 = ((tile_chunk[1]*shard_size) %  MAX_IMAGE_SIZE) // shard_size
+                chunk_width = MAX_IMAGE_SIZE // shard_size
+                if (width - x_block*MAX_IMAGE_SIZE) < MAX_IMAGE_SIZE:
+                    chunk_width = ceil((width - x_block*MAX_IMAGE_SIZE) / shard_size)
+
+                # get image block
+                blob = bucket_temp.blob(str(slice))
+                blob = bucket_temp.blob(f"{slice}_{x_block}_{y_block}")
+                
+                # read offset binary
+                pre = 24 # start of index
             
-            # x and y block location
-            x_block = (tile_chunk[0]*shard_size) // MAX_IMAGE_SIZE
-            y_block = (tile_chunk[1]*shard_size) // MAX_IMAGE_SIZE
+                spot = chunk_tile_chunk_1*chunk_width + chunk_tile_chunk_0
+                start_index = pre + spot * 8
+                end_index = start_index + 16 - 1
 
-            # setup offsets for finding shards
-            chunk_tile_chunk_0 = ((tile_chunk[0]*shard_size) %  MAX_IMAGE_SIZE) // shard_size
-            chunk_tile_chunk_1 = ((tile_chunk[1]*shard_size) %  MAX_IMAGE_SIZE) // shard_size
-            chunk_width = MAX_IMAGE_SIZE // shard_size
-            if (width - x_block*MAX_IMAGE_SIZE) < MAX_IMAGE_SIZE:
-                chunk_width = ceil((width - x_block*MAX_IMAGE_SIZE) / shard_size)
+                im_range = blob.download_as_string(start=start_index, end=end_index)
+                start = int.from_bytes(im_range[0:8], byteorder="little")
+                end = int.from_bytes(im_range[8:16], byteorder="little", signed=False) - 1
+                
+                # png blob
+                tries = 5
+                found = False
+                while not found and tries > 0:
+                    tries -= 1
+                    try:
+                        im_data = blob.download_as_string(start=start, end=end)
+                        found = True
+                    except Exception:
+                        time.sleep(2)
+                        pass
 
-            # get image block
-            blob = bucket_temp.blob(str(slice))
-            blob = bucket_temp.blob(f"{slice}_{x_block}_{y_block}")
-            
-            # read offset binary
-            pre = 24 # start of index
-        
-            spot = chunk_tile_chunk_1*chunk_width + chunk_tile_chunk_0
-            start_index = pre + spot * 8
-            end_index = start_index + 16 - 1
+                if not found:
+                    raise Exception("File not found")
 
-            im_range = blob.download_as_string(start=start_index, end=end_index)
-            start = int.from_bytes(im_range[0:8], byteorder="little")
-            end = int.from_bytes(im_range[8:16], byteorder="little", signed=False) - 1
-            
-            # png blob
-            im_data = blob.download_as_string(start=start, end=end)
-            im = Image.open(io.BytesIO(im_data))
-            img_array = np.array(im)
-            height2, width2 = im.height, im.width
-           
-            #with io.BytesIO() as output:
-            #    blob = bucket_temp.blob(str(slice)+".png")
-            #    im.save(output, format="PNG")
-            #    blob.upload_from_string(output.getvalue(), content_type="image/png")
+                im = Image.open(io.BytesIO(im_data))
+                img_array = np.array(im)
+                height2, width2 = im.height, im.width
+               
+                #with io.BytesIO() as output:
+                #    blob = bucket_temp.blob(str(slice)+".png")
+                #    im.save(output, format="PNG")
+                #    blob.upload_from_string(output.getvalue(), content_type="image/png")
 
-            if slice == zstart:
-                vol3d = np.zeros((zfinish-zstart+1, height2, width2), dtype=np.uint8)
-            vol3d[(slice-zstart), :, :] = img_array
-        
+                if slice == zstart:
+                    vol3d = np.zeros((zfinish-zstart+1, height2, width2), dtype=np.uint8)
+                vol3d[(slice-zstart), :, :] = img_array
+
+            except Exception as e:
+                failure = e
+                raise
+
         # number of downsample levels
         num_levels = 6
 
         # fetch 1024x1024 tile from each imagee
-        def set_images(start, finish, thread_id, num_threads):
+        def set_images(start, finish, zstart_vol, thread_id, num_threads):
             for slice in range(start, finish+1):
                 if (slice % num_threads) == thread_id:
-                    set_image(slice, start, finish)
+                    set_image(slice, zstart_vol, finish)
 
         def _write_shard(level, start, vol3d, format, dataset=None):
             """Method to write shard through tensorstore.
@@ -434,12 +458,15 @@ def ngshard():
 
             # use 20 threads in parallel to fetch
             num_threads = 20
-            threads = [threading.Thread(target=set_images, args=(zstart+1, zfinish, thread_id, num_threads)) for thread_id in range(num_threads)]
+            threads = [threading.Thread(target=set_images, args=(zstart+1, zfinish, zstart, thread_id, num_threads)) for thread_id in range(num_threads)]
             for thread in threads:
                 thread.start()
             for thread in threads:
                 thread.join()
-        
+
+            if failure is not None:
+                raise Exception("tile not fetched")
+
             # write grayscale for each level
             start = (tile_chunk[0]*shard_size, tile_chunk[1]*shard_size, zstart)
 
