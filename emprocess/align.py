@@ -185,12 +185,14 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             # get bbox
             if slice == minz:
                 global_bbox = [0, bbox0[0], 0, bbox0[1]] 
-   
+  
+            """
             if bbox[0] > global_bbox[1]:
                 global_bbox[1] = bbox[0]
 
             if bbox[1] > global_bbox[3]:
                 global_bbox[3] = bbox[1]
+            """
 
             # multiply matrices
             mod_affine = []
