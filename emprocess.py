@@ -230,7 +230,7 @@ for WORKER_POOL in WORKER_POOLS:
             ghook.create_bucket(bucket_name=bucket_name + "_chunk_" + run_id, project_id=project_id, storage_class="REGIONAL", location="US-EAST4")
             
             # will be auto deleted
-            ghook.create_bucket(bucket_name=bucket_name + "_tmp_" + run_id, project_id=project_id, storage_class="REGIONAL", location="US-EAST4")
+            ghook.create_bucket(bucket_name=bucket_name + "_tmp_" + run_id, project_id=project_id) #, storage_class="REGIONAL", location="US-EAST4")
             
             # will be made public readable
             ghook.create_bucket(bucket_name=bucket_name + "_ng_" + run_id, project_id=project_id, storage_class="REGIONAL", location="US-EAST4")
@@ -253,9 +253,10 @@ for WORKER_POOL in WORKER_POOLS:
             align_end_t.task_id, "http_requests", TEST_MODE, SHARD_SIZE)
 
     # pull xcom from a subdag to see if data was written
-    def iswritten(**context):
+    def iswritten(value, **context):
         #value = context['task_instance'].xcom_pull(dag_id=f"{DAG_NAME}.align", task_ids="write_align")
-        value = context['task_instance'].xcom_pull(task_ids=align_end_t.task_id)
+        #value = context['task_instance'].xcom_pull(task_ids=align_end_t.task_id, key="bbox")
+        #logging.info(align_end_t.task_id)
         if value is not None:
             return value
         return False
@@ -265,6 +266,7 @@ for WORKER_POOL in WORKER_POOLS:
         task_id='iswritten',
         python_callable=iswritten,
         trigger_rule=TriggerRule.ALL_DONE,
+        op_kwargs={"value": f"{{{{ task_instance.xcom_pull(task_ids='{align_end_t.task_id}') }}}}"},
         provide_context=True,
         dag=dag)
 
