@@ -53,7 +53,7 @@ def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST
         http_conn_id="IMG_WRITE",
         endpoint="/ngmeta",
         data=json.dumps({
-                "dest": "{{ dag_run.conf['source'] }}",
+                "dest": "{{ dag_run.conf['source'] }}_ng_{{ run_id }}",
                 "minz": "{{ dag_run.conf['minz'] }}",
                 "maxz": "{{ dag_run.conf['maxz'] }}",
                 "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
@@ -89,7 +89,8 @@ def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST
                 for iterx in range(xstart, xfinish+1):
                     if (glb_iter % num_workers) == worker_id:
                         params = {
-                                    "dest": data["source"], # will write to location + /ng/raw or /ng/jpeeg
+                                    "dest": data["source"], # will write to location jpeg
+                                    "dest_raw": data["source_raw"], # will write raw chunkse
                                     "source": data["temp_location"], # location of tiles
                                     "start": [iterx, itery, iterz],
                                     "shard-size": data["shard-size"],
@@ -115,8 +116,9 @@ def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST
             worker_id=worker_id,
             num_workers=NUM_WORKERS,
             data={
-                    "source": "{{ dag_run.conf['source'] }}",
-                    "temp_location": f"{{{{ dag_run.conf['source'] }}}}_" + "{{ ds_nodash }}",
+                    "source": "{{ dag_run.conf['source'] }}_ng_{{ run_id }}",
+                    "source_raw": "{{ dag_run.conf['source'] }}_chunk_{{ run_id }}",
+                    "temp_location": f"{{{{ dag_run.conf['source'] }}}}_tmp_{{{{ run_id }}}}",
                     "minz": "{{ dag_run.conf['minz'] }}",
                     "maxz": "{{ dag_run.conf['maxz'] }}",
                     "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
@@ -128,7 +130,7 @@ def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST
             headers=headers,
             log_response=False,
             num_http_tries=5, # retrying works okay now
-            cache="gs://" + "{{ dag_run.conf['source'] }}" + "/neuroglancer/cache" if not TEST_MODE else "",
+            cache="gs://" + "{{ dag_run.conf['source'] }}_process/{{ run_id }}/neuroglancer/cache" if not TEST_MODE else "",
             xcom_push=False,
             pool=pool,
             try_number = "{{ task_instance.try_number }}",

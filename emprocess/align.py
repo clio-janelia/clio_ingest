@@ -1,4 +1,4 @@
-"""Provides DAG task definitions for performing alignment.
+"""PROVIdes DAG task definitions for performing alignment.
 
 The module generates tasks that examines image pairs,
 calculates an affine transformation that minimizes differences
@@ -66,11 +66,11 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
 
         # grab all files in raw
         ghook = GoogleCloudStorageHook() # uses default gcp connection
-        file_names = ghook.list(source, prefix="raw/")
+        file_names = ghook.list(source, prefix="")
         file_names = set(file_names)
 
         for slice in range(minz, maxz):
-            if ("raw/" + (image % slice)) not in file_names:  
+            if ((image % slice)) not in file_names:  
                 raise AirflowException(f"raw data not loaded properly.  Missing raw/{image % slice}")
 
     # find global coordinate system and write transforms
@@ -103,7 +103,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         need to use a docker image.
         """
         
-        source = context["dag_run"].conf.get("source")
+        source = context["dag_run"].conf.get("source") + "_process" 
         image = context["dag_run"].conf.get("image")
         minz = context["dag_run"].conf.get("minz")
         maxz = context["dag_run"].conf.get("maxz")
@@ -168,7 +168,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         bucket = client.bucket(bucket_name)
 
         for worker_id in range(0, NUM_WORKERS):
-            blob = bucket.blob(blob_name=f"align/affine_cache/worker-{worker_id}")
+            blob = bucket.blob(blob_name=f"{context['dag_run'].run_id}/align/affine_cache/worker-{worker_id}")
             # raises error if not found
             res = json.loads(blob.download_as_string().decode())
 
@@ -249,20 +249,12 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             ghook = GoogleCloudStorageHook() # uses default gcp connection
             client = ghook.get_conn()
             bucket = client.bucket(source)
-            blob = bucket.blob(blob_name="align/transforms.csv")
+            blob = bucket.blob(blob_name=f"{context['dag_run'].run_id}/align/transforms.csv")
             blob.upload_from_string(affines_csv) 
            
             # write the json parseable transforms to align/transforms.json
-            blob = bucket.blob(blob_name="align/transforms.json")
+            blob = bucket.blob(blob_name=f"{context['dag_run'].run_id}/align/transforms.json")
             blob.upload_from_string(json.dumps(transforms_out)) 
-
-            # create bucket for temporary images
-            try:
-                ghook.create_bucket(bucket_name=temp_location, project_id=project_id)
-            except AirflowException as e:
-                # ignore if the erorr is the bucket exists
-                if not str(e).startswith("409"):
-                    raise
 
     # find global coordinate system and write transforms
     collect_id = f"{name}.collect"
@@ -270,7 +262,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         task_id=collect_id,
         python_callable=collect_affine,
         provide_context=True,
-        op_kwargs={'temp_location': "{{ dag_run.conf['source'] }}" + "_" + "{{ ds_nodash }}", "bucket_name": "{{ dag_run.conf['source'] }}"},
+        op_kwargs={'temp_location': "{{ dag_run.conf['source'] }}" + "_" + "{{ ds_nodash }}", "bucket_name": "{{ dag_run.conf['source'] }}_process"},
         dag=dag,
     )
  
@@ -314,8 +306,8 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         task_list = []
         for slice in range(minz, maxz):
             if (slice % num_workers) == worker_id:
-                img1 = "gs://" + source + "/raw/" + image % slice + downsample_postfix
-                img2 = "gs://" + source + "/raw/" + image % (slice+1) + downsample_postfix 
+                img1 = "gs://" + source + "/" + image % slice + downsample_postfix
+                img2 = "gs://" + source + "/" + image % (slice+1) + downsample_postfix 
                 params = {
                             "command": "-Xmx2g -XX:+UseCompressedOops -Dpre=\"img1.png\" -Dpost=\"img2.png\" -- --headless \"fiji_align.bsh\"",
                         "input-map": {
@@ -349,8 +341,8 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         if not TEST_MODE:
             ghook = GoogleCloudStorageHook() # uses default gcp connection
             client = ghook.get_conn()
-            bucket = client.bucket(bucket_name)
-            blob = bucket.blob(blob_name="align/transforms.json")
+            bucket = client.bucket(bucket_name + "_process")
+            blob = bucket.blob(blob_name=f"{context['dag_run'].run_id}/align/transforms.json")
             trans_str = blob.download_as_string().decode() 
             transform_vals = json.loads(trans_str)
 
@@ -370,7 +362,8 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
                         "dest-tmp": dest_tmp,
                         "slice": slice,
                         "shard-size": shard_size,
-                        "dest": dest
+                        "dest": dest,
+                        "run_id": context["dag_run"].run_id
                 }        
                 task_list.append([f"{slice}", params])
 
@@ -415,7 +408,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             log_response=False,
             num_http_tries=5,
             xcom_push=True,
-            cache="gs://" + "{{ dag_run.conf['source'] }}" + "/align/affine_cache" if not TEST_MODE else "",
+            cache="gs://" + "{{ dag_run.conf['source'] }}_process/{{ run_id }}/align/affine_cache" if not TEST_MODE else "",
             validate_output=validate_output,
             try_number = "{{ task_instance.try_number }}",
             pool=pool,
@@ -434,7 +427,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
                     "minz": "{{ dag_run.conf['minz'] }}",
                     "maxz": "{{ dag_run.conf['maxz'] }}",
                     "image": "{{ dag_run.conf['image'] }}",
-                    "dest-tmp": "{{ dag_run.conf['source'] }}" + "_" + "{{ ds_nodash }}",
+                    "dest-tmp": "{{ dag_run.conf['source'] }}_tmp_{{ run_id }}",
                     "shard-size": SHARD_SIZE,
                     "collect_id": collect_id,
                     "bucket_name": "{{ dag_run.conf['source'] }}"
@@ -443,7 +436,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
             endpoint="/alignedslice",
             headers=headers,
             log_response=False,
-            cache="gs://" + "{{ dag_run.conf['source'] }}" + "/align/write_cache" if not TEST_MODE else "",
+            cache="gs://" + "{{ dag_run.conf['source'] }}_process/{{ run_id }}/align/write_cache" if not TEST_MODE else "",
             num_http_tries=5,
             xcom_push=False,
             try_number = "{{ task_instance.try_number }}",

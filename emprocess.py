@@ -53,6 +53,7 @@ from airflow.operators.bash_operator import BashOperator
 from airflow.operators.subdag_operator import SubDagOperator
 from airflow.models import Variable
 from airflow import AirflowException
+import subprocess
 
 import logging
 import json
@@ -178,7 +179,70 @@ for WORKER_POOL in WORKER_POOLS:
             dag=dag,
             )
 
+    def create_env(run_id, **context):
+        """Run id should be some random UUID.
+        """
+        
+        ghook = GoogleCloudStorageHook() # uses default gcp connection
+        bucket_name = context["dag_run"].conf.get('source')
+        project_id = context["dag_run"].conf.get("project_id")
+        if not TEST_MODE:
+            """
+            # _process bucket could already exist
+            try:
+                subprocess.check_output([f"gsutil mb -p {project_id} -l US-EAST4 -b on gs://{bucket_name + '_process'}"], shell=True).decode()
+            except Exception:
+                pass
 
+            # other buckets should not have been created before
+
+            # this data can be used for chunk-based image processing)
+            try:
+                subprocess.check_output([f"gsutil mb -p {project_id} -l US-EAST4 -b on gs://{bucket_name + '_chunk_' + run_id}"], shell=True).decode()
+            except Exception:
+                pass
+
+            # will be auto deleted
+            try:
+                subprocess.check_output([f"gsutil mb -p {project_id} -l US-EAST4 -b on gs://{bucket_name + '_tmp_' + run_id}"], shell=True).decode()
+            except Exception:
+                pass
+
+            # will be made public readable
+            try:
+                subprocess.check_output([f"gsutil mb -p {project_id} -l US-EAST4 -b on gs://{bucket_name + '_ng_' + run_id}"], shell=True).decode()
+            except Exception:
+                pass
+            """
+
+            # interface does not support enabling uniform IAM. 
+            # create bucket for configs (ignore if it already existss
+            try:
+                ghook.create_bucket(bucket_name=bucket_name + "_process", project_id=project_id, storage_class="REGIONAL", location="US-EAST4")
+            except AirflowException as e:
+                # ignore if the erorr is the bucket exists
+                if not str(e).startswith("409"):
+                    raise
+
+            # other buckets should not have been created before
+
+            # this data can be used for chunk-based image processing)
+            ghook.create_bucket(bucket_name=bucket_name + "_chunk_" + run_id, project_id=project_id, storage_class="REGIONAL", location="US-EAST4")
+            
+            # will be auto deleted
+            ghook.create_bucket(bucket_name=bucket_name + "_tmp_" + run_id, project_id=project_id, storage_class="REGIONAL", location="US-EAST4")
+            
+            # will be made public readable
+            ghook.create_bucket(bucket_name=bucket_name + "_ng_" + run_id, project_id=project_id, storage_class="REGIONAL", location="US-EAST4")
+
+    # create UUID for dag run and necessary gbuckets
+    create_env_t = PythonOperator(
+            task_id="create_env",
+            provide_context=True,
+            python_callable=create_env,
+            op_kwargs={"run_id": "{{run_id}}"},
+            dag=dag,
+            )
     # expects dag run configruation with "image", "minz", "maxz", "source", "project", and "downsample_factor"
     align_start_t, align_end_t = align.align_dataset_psubdag(dag, DAG_NAME+".align", WORKER_POOL,
             "http_requests", TEST_MODE, SHARD_SIZE)
@@ -219,7 +283,7 @@ for WORKER_POOL in WORKER_POOLS:
                         }
     commands = f"echo '{json.dumps(lifecycle_config)}' > life.json;\n"
     if not TEST_MODE:
-        commands += "gsutil lifecycle set life.json gs://{{ dag_run.conf['source'] }}_" + "{{ ds_nodash }};\n"
+        commands += "gsutil lifecycle set life.json gs://{{ dag_run.conf['source'] }}_tmp_{{ run_id }};\n"
     commands += "rm life.json;"
 
     cleanup_t = BashOperator(
@@ -233,10 +297,30 @@ for WORKER_POOL in WORKER_POOLS:
             task_id="notify",
             to="{{ dag_run.conf['email'] }}",
             subject=f"airflow:{DAG_NAME}",
-            html_content="Job finished.  View on neuroglancer (source = precomputed://gs://{{ dag_run.conf['source'] }}/neuroglancer/jpeg)",
+            html_content="Job finished.  View on neuroglancer (source = precomputed://gs://{{ dag_run.conf['source'] }}_ng_{{ run_id }}/neuroglancer/jpeg)",
             dag=dag
     )
-   
+ 
+    read_config = [
+                {
+                  "origin": ["*"],
+                  "responseHeader": ["Content-Length", "Content-Type", "Date", "Range", "Server", "Transfer-Encoding", "X-GUploader-UploadID", "X-Google-Trace", "Access-Control-Allow-Credentials"], 
+                  "method": ["GET", "HEAD", "OPTIONS", "POST"],
+                  "maxAgeSeconds": 3600
+                }
+                ]
+
+    read_commands = f"echo '{json.dumps(read_config)}' > read.json;\n"
+    if not TEST_MODE:
+        read_commands += "gsutil iam ch allUsers:objectViewer gs://{{ dag_run.conf['source'] }}_ng_{{ run_id }}; gsutil cors set read.json gs://{{ dag_run.conf['source'] }}_ng_{{ run_id }};\n"
+    read_commands += "rm read.json;"
+
+    set_public_read_t = BashOperator(
+                    task_id="set_public_read",
+                    bash_command=read_commands,
+                    dag=dag,
+                )
+
     def write_status(**context):
         # test mode disable
         if not TEST_MODE:
@@ -244,8 +328,8 @@ for WORKER_POOL in WORKER_POOLS:
             ghook = GoogleCloudStorageHook() # uses default gcp connection
             client = ghook.get_conn()
             source = context["dag_run"].conf.get("source")
-            bucket = client.bucket(source)
-            blob = bucket.blob(blob_name="ingestion_dagrun.txt")
+            bucket = client.bucket(source + "_process")
+            blob = bucket.blob(blob_name=f"{context['dag_run'].run_id}/ingestion_dagrun.txt")
             project_id = context["dag_run"].conf.get("project_id")
 
             data = context["dag_run"].conf
@@ -262,10 +346,9 @@ for WORKER_POOL in WORKER_POOLS:
     )
 
     # cleanup is triggered if alignment completes properly
-    validate_t >> align_start_t
+    validate_t >> create_env_t >> align_start_t
     align_end_t >> ngingest_start_t
     [align_end_t, ngingest_end_t] >> isaligned_t >> cleanup_t 
-    [ngingest_end_t, cleanup_t] >> notify_t >> write_status_t
-    
+    [ngingest_end_t, cleanup_t] >> set_public_read_t >> notify_t >> write_status_t
 
 

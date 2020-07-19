@@ -45,7 +45,7 @@ OVERLAP_SIZE = 512
 
 @app.route('/alignedslice', methods=["POST"])
 def alignedslice():
-    """Read images storeed in bucket/raw/image, apply the affine transformation
+    """Read images storeed in bucket/image, apply the affine transformation
     and write result to bucket/align/image and bucket_temp/slice.
     """
     try:
@@ -74,7 +74,9 @@ def alignedslice():
             return im
 
         name = config_file["img"] 
-        bucket_name = config_file["dest"] # contains source and destination
+        bucket_name = config_file["dest"] # contains source
+        run_id = config_file["run_id"] # contains id for job run for caching thumbnails
+
         bucket_name_temp = config_file["dest-tmp"] # destination for tiles
         affine_trans = json.loads(config_file["transform"])
         [width, height]  = json.loads(config_file["bbox"])
@@ -84,14 +86,15 @@ def alignedslice():
         # read file
         storage_client = storage.Client()
         bucket = storage_client.bucket(bucket_name)
-        blob = bucket.blob("raw/" + name)
+        blob = bucket.blob(name)
         pre_image_bin = blob.download_as_string()
         curr_im = Image.open(io.BytesIO(pre_image_bin))
         del pre_image_bin
 
         # make small thumbnail for first tile or only tile
         # (mostly for debugging or quick viewing in something like fiji)
-        blob = bucket.blob("align/" + name)
+        bucket_thumb = storage_client.bucket(bucket_name + "_process")
+        blob = bucket_thumb.blob(run_id + "/align/" + name)
         TARGET_SIZE = 4096
         with io.BytesIO() as output:
             max_dim = max(width, height)
@@ -193,8 +196,6 @@ def alignedslice():
             def write_sub_image_tiles(thread_id):
                 nonlocal failure
                 try:
-                    storage_client = storage.Client()
-                    bucket = storage_client.bucket(bucket_name)
                     # write temp png tiles
                     job_id = -1
                     
@@ -277,7 +278,7 @@ def ngmeta():
             raise RuntimeError("shard size must be 1024x1024x1024")
         write_raw  = json.loads(config_file["writeRaw"].lower())
 
-        # write jpeg config to bucket/neuroglancer/raw/info
+        # write jpeg config to bucket/neuroglancer/jpeg/info
         storage_client = storage.Client()
         config = create_meta(width, height, minz, maxz, shard_size, False, res)
         bucket = storage_client.bucket(bucket_name)
@@ -285,10 +286,12 @@ def ngmeta():
         blob.upload_from_string(json.dumps(config))
        
         # write raw config to bucket/neuroglancer/raw/info
+        """
         if write_raw:
             config = create_meta(width, height, minz, maxz, shard_size, True, res)
             blob = bucket.blob("neuroglancer/raw/info")
             blob.upload_from_string(json.dumps(config))
+        """
 
         r = make_response("success".encode())
         r.headers.set('Content-Type', 'text/html')
@@ -304,6 +307,7 @@ def ngshard():
         config_file  = request.get_json()
         
         bucket_name = config_file["dest"] # contains source and destination
+        bucket_name_raw = config_file["dest_raw"] # contains source and destination
         bucket_tiled_name = config_file["source"] # contains image tiles
         tile_chunk = config_file["start"]
         minz  = config_file["minz"]
@@ -313,6 +317,7 @@ def ngshard():
         if shard_size != 1024:
             raise RuntimeError("shard size must be 1024x1024x1024")
         write_raw  = json.loads(config_file["writeRaw"].lower())
+        write_raw = False
 
         # extract 1024x1024x1024 cube based on tile chunk
         zstart = max(shard_size*tile_chunk[2], minz)
@@ -421,8 +426,8 @@ def ngshard():
 
         for zstart in range(glb_zstart, glb_zfinish+1, 512):
             zfinish = zstart + 512 - 1
-            if zfinish > glb_finish:
-                zfinish = glb_finish
+            if zfinish > glb_zfinish:
+                zfinish = glb_zfinish
 
             # set first image
             set_image(zstart, zstart, zfinish)
