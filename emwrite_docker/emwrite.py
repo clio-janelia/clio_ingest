@@ -512,6 +512,7 @@ def ngshard():
             #storage_client2 = storage.Client()
             #bucket = storage_client2.bucket(bucket_name)
 
+            gc.collect()
             if write_raw:
                 if zstart % shard_size == 0:
                     # only support shard aligned now
@@ -525,19 +526,19 @@ def ngshard():
                                 if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
                                     continue
                                 _write_shard_raw(vol3d_temp, (iterx//512, itery//512, iterz//512))
-                                
+            gc.collect()
 
             # put in fortran order
             vol3d = vol3d.transpose((2,1,0))
 
             for level in range(num_levels):
                 if level == 0:
-                    # iterate through different 512 cubes since 1024 will not fit in memory
+                    # iterate through different 256 cubes since 1024 will not fit in memory
                     dataset_jpeg = None
-                    for iterz in range((zstart-glb_zstart), (zstart-glb_zstart) + 512, 512):
-                        for itery in range(0, 1024, 512):
-                            for iterx in range(0, 1024, 512):
-                                vol3d_temp = vol3d[iterx:(iterx+512), itery:(itery+512), iterz:(iterz+512)]
+                    for iterz in range((zstart-glb_zstart), (zstart-glb_zstart) + 512, 256):
+                        for itery in range(0, 1024, 256):
+                            for iterx in range(0, 1024, 256):
+                                vol3d_temp = vol3d[iterx:(iterx+256), itery:(itery+256), iterz:(iterz+256)]
                                 currsize = vol3d_temp.shape
                                 if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
                                     continue
