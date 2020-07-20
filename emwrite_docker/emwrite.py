@@ -64,7 +64,30 @@ def alignedslice():
                 for x in range(pad_x0, w-pad_x1, CLAHE_SIZE):
                     ystart = max(0, y-OVERLAP_SIZE)
                     xstart = max(0, x-OVERLAP_SIZE)
-                    im_sub = (exposure.equalize_adapthist(im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)], kernel_size = 1024)*255).astype(np.uint8)
+                    #im[ystart, xstart] = 0
+                    #im[ystart, xstart+1] = 255
+
+                    # spread out 0 first over range
+                    im_sub = im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)]
+            
+                    # if all 0 skip
+                    if len(im_sub[im_sub != 0]) == 0:
+                        continue
+
+                    min_val = im_sub[im_sub != 0].min()
+                    max_val = im_sub.max()
+                    
+                    # create a random matrix between min and max to spread out values
+                    im_sub = np.random.randint(min_val, max_val + 1, im_sub.shape, np.uint8)
+                    im_sub[ im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)] != 0 ] = 0
+                    im_sub = im_sub + im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)] 
+                    
+                    # use modified image to run clahe
+                    im_sub = (exposure.equalize_adapthist(im_sub, kernel_size = 1024)*255).astype(np.uint8)
+                    
+                    # reset zeros
+                    im_sub[ im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)] == 0 ] = 0
+
                     ys, xs = im_sub.shape
                     target[ystart:(ystart+ys), xstart:(xstart+xs)] = im_sub
 
@@ -270,6 +293,7 @@ def ngmeta():
     try:
         config_file  = request.get_json()
         bucket_name = config_file["dest"] # contains source and destination
+        bucket_name_raw = config_file["dest_raw"] # contains source and destination
         minz  = int(config_file["minz"])
         maxz  = int(config_file["maxz"])
         res = int(config_file["resolution"])
@@ -287,12 +311,11 @@ def ngmeta():
         blob.upload_from_string(json.dumps(config))
        
         # write raw config to bucket/neuroglancer/raw/info
-        """
         if write_raw:
             config = create_meta(width, height, minz, maxz, shard_size, True, res)
+            bucket = storage_client.bucket(bucket_name_raw)
             blob = bucket.blob("neuroglancer/raw/info")
             blob.upload_from_string(json.dumps(config))
-        """
 
         r = make_response("success".encode())
         r.headers.set('Content-Type', 'text/html')
@@ -544,9 +567,9 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw, res):
                 "scales" : [
                     {
                         "chunk_sizes" : [
-                            [ 128, 128, 128 ]
+                            [ 512, 512, 512 ]
                             ],
-                        "encoding" : "raw",
+                        "encoding" : "gzip",
                         "key" : f"{res}.0x{res}.0x{res}.0",
                         "resolution" : [ res, res, res ],
                         "size" : [ width, height, (maxz+1) ],

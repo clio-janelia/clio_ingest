@@ -54,6 +54,7 @@ def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST
         endpoint="/ngmeta",
         data=json.dumps({
                 "dest": "{{ dag_run.conf['source'] }}_ng_{{ run_id }}",
+                "dest_raw": "{{ dag_run.conf['source'] }}_chunk_{{ run_id }}",
                 "minz": "{{ dag_run.conf['minz'] }}",
                 "maxz": "{{ dag_run.conf['maxz'] }}",
                 "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
