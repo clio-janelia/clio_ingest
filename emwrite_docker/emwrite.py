@@ -19,6 +19,7 @@ import traceback
 import threading
 from skimage import exposure
 import gc
+import gzip
 
 import time
 import psutil
@@ -334,6 +335,7 @@ def ngshard():
         bucket_name_raw = config_file["dest_raw"] # contains source and destination
         bucket_tiled_name = config_file["source"] # contains image tiles
         tile_chunk = config_file["start"]
+        resolution = config_file["resolution"]
         minz  = config_file["minz"]
         maxz  = config_file["maxz"]
         [width, height]  = json.loads(config_file["bbox"])
@@ -341,7 +343,6 @@ def ngshard():
         if shard_size != 1024:
             raise RuntimeError("shard size must be 1024x1024x1024")
         write_raw  = json.loads(config_file["writeRaw"].lower())
-        write_raw = False
 
         # extract 1024x1024x1024 cube based on tile chunk
         zstart = max(shard_size*tile_chunk[2], minz)
@@ -450,6 +451,21 @@ def ngshard():
             size = vol3d.shape
             dataset[ start[0]:(start[0]+size[0]), start[1]:(start[1]+size[1]), start[2]:(start[2]+size[2]) ] = vol3d 
             return dataset 
+        
+
+        storage_client = storage.Client()
+        bucket_raw = storage_client.bucket(bucket_name_raw)
+        def _write_shard_raw(vol3d, offset):
+            """Write gzip 512x512x512 in ng format.
+            """
+
+            start = [tile_chunk[0]*shard_size + offset[0]*512, tile_chunk[1]*shard_size + offset[1]*512, glb_zstart + offset[2]*512]
+
+            blob = bucket_raw.blob(f"neuroglancer/raw/{resolution}.0x{resolution}.0x{resolution}.0/{start[0]}-{start[0]+512}_{start[1]}-{start[1]+512}_{start[2]}-{start[2]+512}")
+            blob.content_encoding = "gzip"
+            tarr = np.zeros((512, 512, 512), dtype=np.uint8)
+            tarr[0:vol3d.shape[0], 0:vol3d.shape[1], 0:vol3d.shape[2]] = vol3d
+            blob.upload_from_string(gzip.compress(tarr.tostring()), content_type="application/octet-stream")
 
         def _downsample(vol):
             """Downsample piecewise.
@@ -493,37 +509,41 @@ def ngshard():
             # write grayscale for each level
             start = (tile_chunk[0]*shard_size, tile_chunk[1]*shard_size, zstart)
 
-            # put in fortran order
-            vol3d = vol3d.transpose((2,1,0))
-
             #storage_client2 = storage.Client()
             #bucket = storage_client2.bucket(bucket_name)
 
+            if write_raw:
+                if zstart % shard_size == 0:
+                    # only support shard aligned now
+                    for iterz in range((zstart-glb_zstart), (zstart-glb_zstart) + 512, 512):
+                        for itery in range(0, 1024, 512):
+                            for iterx in range(0, 1024, 512):
+                                vol3d_temp = vol3d[iterz:(iterz+512), itery:(itery+512), iterx:(iterx+512)]
+    
+                                # ignore if empty
+                                currsize = vol3d_temp.shape
+                                if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
+                                    continue
+                                _write_shard_raw(vol3d_temp, (iterx//512, itery//512, iterz//512))
+                                
+
+            # put in fortran order
+            vol3d = vol3d.transpose((2,1,0))
+
             for level in range(num_levels):
                 if level == 0:
-                    # iterate through different 256 cubes since 1024 will not fit in memory
+                    # iterate through different 512 cubes since 1024 will not fit in memory
                     dataset_jpeg = None
-                    dataset_raw = None
-                    for iterz in range((zstart-glb_zstart), (zstart-glb_zstart) + 512, 256):
-                        for itery in range(0, 1024, 256):
-                            for iterx in range(0, 1024, 256):
-                                vol3d_temp = vol3d[iterx:(iterx+256), itery:(itery+256), iterz:(iterz+256)]
+                    for iterz in range((zstart-glb_zstart), (zstart-glb_zstart) + 512, 512):
+                        for itery in range(0, 1024, 512):
+                            for iterx in range(0, 1024, 512):
+                                vol3d_temp = vol3d[iterx:(iterx+512), itery:(itery+512), iterz:(iterz+512)]
                                 currsize = vol3d_temp.shape
                                 if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
                                     continue
                                 start_temp = (start[0]+iterx, start[1]+itery, start[2]+iterz) 
                                 
                                 _write_shard(level, start_temp, vol3d_temp, "jpeg", dataset_jpeg)
-                                if write_raw:
-                                    # zoffset is not correctly set !!
-                                    #blob = bucket.blob(f"chunks/{start[0]}-{start[0]+512}_{start[1]}-{start[1]+512}_{start[2]}-{start[2]+512}")
-                                    #tarr = np.zeros((512, 512, 512), dtype=np.uint8)
-                                    #tarr[0:vol3d_temp.shape[0], 0:vol3d_temp.shape[1], 0:vol3d_temp.shape[2]] = vol3d_temp
-
-                                    #blob.upload_from_string(tarr.tostring(), content_type="application/octet-stream")
-                                     
-
-                                    _write_shard(level, start_temp, vol3d_temp, "raw", dataset_raw)
                 else:
                     _write_shard(level, start, vol3d, "jpeg")
 
@@ -569,7 +589,7 @@ def create_meta(width, height, minz, maxz, shard_size, isRaw, res):
                         "chunk_sizes" : [
                             [ 512, 512, 512 ]
                             ],
-                        "encoding" : "gzip",
+                        "encoding" : "raw",
                         "key" : f"{res}.0x{res}.0x{res}.0",
                         "resolution" : [ res, res, res ],
                         "size" : [ width, height, (maxz+1) ],

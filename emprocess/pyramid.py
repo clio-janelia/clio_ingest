@@ -96,6 +96,7 @@ def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST
                                     "start": [iterx, itery, iterz],
                                     "shard-size": data["shard-size"],
                                     "bbox": data["bbox"],
+                                    "resolution": data["resolution"],
                                     "minz": int(data["minz"]),
                                     "maxz": int(data["maxz"]),
                                     "writeRaw": data["writeRaw"] 
@@ -124,6 +125,7 @@ def export_dataset_psubdag(dag, name, NUM_WORKERS, bbox_task_id, pool=None, TEST
                     "maxz": "{{ dag_run.conf['maxz'] }}",
                     "bbox": f"{{{{ task_instance.xcom_pull(task_ids='{bbox_task_id}') }}}}",
                     "writeRaw": "{{ dag_run.conf.get('createRawPyramid', True) }}",
+                    "resolution": "{{ dag_run.conf.get('resolution', 8) }}",
                     "shard-size": SHARD_SIZE
             },
             conn_id="IMG_WRITE",
