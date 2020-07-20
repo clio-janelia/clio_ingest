@@ -467,20 +467,20 @@ def ngshard():
             tarr[0:vol3d.shape[0], 0:vol3d.shape[1], 0:vol3d.shape[2]] = vol3d
             blob.upload_from_string(gzip.compress(tarr.tostring()), content_type="application/octet-stream")
 
-        def _downsample(vol):
+        def _downsample(vol, mode="constant"):
             """Downsample piecewise.
             """
             x,y,z = vol.shape
 
             # just call interpolate over whole volume if large enough
             if x <= 256 and y <= 256 and z <= 256:
-                return ndimage.interpolation.zoom(vol, 0.5, order=1)
+                return ndimage.interpolation.zoom(vol, 0.5, order=1, mode=mode)
             
             target = np.zeros((round(x/2),round(y/2),round(z/2)), dtype=np.uint8)
             for xiter in range(0, x, 256):
                 for yiter in range(0, y, 256):
                     for ziter in range(0, z, 256):
-                        target[(xiter//2):((xiter+256)//2), (yiter//2):((yiter+256)//2), (ziter//2):((ziter+256)//2)] = ndimage.interpolation.zoom(vol[xiter:(xiter+256),yiter:(yiter+256),ziter:(ziter+256)], 0.5, order=1)
+                        target[(xiter//2):((xiter+256)//2), (yiter//2):((yiter+256)//2), (ziter//2):((ziter+256)//2)] = ndimage.interpolation.zoom(vol[xiter:(xiter+256),yiter:(yiter+256),ziter:(ziter+256)], 0.5, order=1, mode=mode)
             return target 
         
         ####### Iterate 512 slices at a time ########
@@ -550,7 +550,10 @@ def ngshard():
 
                 # downsample
                 #vol3d = ndimage.interpolation.zoom(vol3d, 0.5)
-                vol3d = _downsample(vol3d)
+                mode = "constant"
+                if level >= 4:
+                    mode = "nearest" 
+                vol3d = _downsample(vol3d, mode)
                 start = (start[0]//2, start[1]//2, start[2]//2)
                 currsize = vol3d.shape
                 if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
