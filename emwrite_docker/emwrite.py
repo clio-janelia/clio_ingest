@@ -52,7 +52,7 @@ def alignedslice():
     try:
         config_file  = request.get_json()
 
-        def clahe(im, pad_x0, pad_x1, pad_y0, pad_y1):
+        def clahe(im, pad_x0, pad_x1, pad_y0, pad_y1, glb_min, glb_max, is_xstart=True, is_ystart=True, is_xend=True, is_yend=True):
             im = np.array(im)
             gc.collect()
 
@@ -65,8 +65,6 @@ def alignedslice():
                 for x in range(pad_x0, w-pad_x1, CLAHE_SIZE):
                     ystart = max(0, y-OVERLAP_SIZE)
                     xstart = max(0, x-OVERLAP_SIZE)
-                    #im[ystart, xstart] = 0
-                    #im[ystart, xstart+1] = 255
 
                     # spread out 0 first over range
                     im_sub = im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)]
@@ -75,6 +73,15 @@ def alignedslice():
                     if len(im_sub[im_sub != 0]) == 0:
                         continue
 
+                    # make sure range is the same for all images
+                    if ystart  > 0 or xstart > 0:
+                        im_sub[0, 0] = glb_min
+                        im_sub[1, 0] = glb_max
+                    elif ((y + CLAHE_SIZE + OVERLAP_SIZE) < h) or ((x + CLAHE_SIZE + OVERLAP_SIZE) < w):
+                        im_sub[-1, -1] = glb_min
+                        im_sub[-1, -2] = glb_max
+
+                    """Erase 0s from iamge
                     min_val = im_sub[im_sub != 0].min()
                     max_val = im_sub.max()
                     
@@ -82,15 +89,33 @@ def alignedslice():
                     im_sub = np.random.randint(min_val, max_val + 1, im_sub.shape, np.uint8)
                     im_sub[ im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)] != 0 ] = 0
                     im_sub = im_sub + im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)] 
-                    
+                    """
+
                     # use modified image to run clahe
-                    im_sub = (exposure.equalize_adapthist(im_sub, kernel_size = 1024)*255).astype(np.uint8)
+                    im_sub = (exposure.equalize_adapthist(im_sub, kernel_size = 1024, clip_limit=0.02)*255).astype(np.uint8)
                     
                     # reset zeros
                     im_sub[ im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)] == 0 ] = 0
 
-                    ys, xs = im_sub.shape
-                    target[ystart:(ystart+ys), xstart:(xstart+xs)] = im_sub
+                    #ys, xs = im_sub.shape
+                    #target[ystart:(ystart+ys), xstart:(xstart+xs)] = im_sub
+
+                    t_ystart = y
+                    t_xstart = x
+                    t_yend = y+CLAHE_SIZE
+                    t_xend = x+CLAHE_SIZE
+                    if ystart == 0 and is_ystart:
+                        t_ystart = 0
+                    if xstart == 0 and is_xstart:
+                        t_xstart = 0
+
+                    if t_yend >= (h - OVERLAP_SIZE) and is_yend:
+                        t_yend = h
+                    if t_xend >= (w - OVERLAP_SIZE) and is_xend:
+                        t_xend = w
+
+                    target[t_ystart:t_yend, t_xstart:t_xend] = im_sub[(t_ystart-ystart):((t_ystart-ystart)+(t_yend-t_ystart)), (t_xstart-xstart):((t_xstart-xstart)+(t_xend-t_xstart))]
+
 
             im = Image.fromarray(target)
             del target
@@ -114,6 +139,10 @@ def alignedslice():
         pre_image_bin = blob.download_as_string()
         curr_im = Image.open(io.BytesIO(pre_image_bin))
         del pre_image_bin
+
+
+        GLB_MIN, GLB_MAX =  curr_im.getextrema()
+        GLB_MIN = 0 # always assume pressence of 0 pixel somewhere
 
         # make small thumbnail for first tile or only tile
         # (mostly for debugging or quick viewing in something like fiji)
@@ -139,7 +168,7 @@ def alignedslice():
         
             # normalize image (even though potentially downsampled heavily)
             
-            im_small = clahe(im_small, 0, 0, 0, 0) 
+            im_small = clahe(im_small, 0, 0, 0, 0, GLB_MIN, GLB_MAX) 
             #im_small = Image.fromarray((exposure.equalize_adapthist(np.array(im_small), kernel_size=1024)*255).astype(np.uint8))
         
             # write output to bucket
@@ -150,6 +179,7 @@ def alignedslice():
 
         #super_tile_chunk = config_file["super-tile-chunk"]
         super_tile_chunks = []
+        
         for itery in range(0, height, MAX_SUPERIMAGE_SIZE):
             for iterx in range(0, width, MAX_SUPERIMAGE_SIZE):
                 super_tile_chunks.append([iterx//MAX_SUPERIMAGE_SIZE, itery//MAX_SUPERIMAGE_SIZE])
@@ -208,8 +238,19 @@ def alignedslice():
                     [0, 0, 1]])
             mat_inv = np.linalg.inv(affine_mat)
             curr_im = curr_im.transform((width, height), Image.AFFINE, data=mat_inv.flatten()[:6], resample=Image.BICUBIC, fillcolor=0)
-            
-            curr_im = clahe(curr_im, startx, trail_x, starty, trail_y)
+          
+            is_startx = is_starty = is_endx = is_endy = False
+            if super_tile_chunk[0] == 0:
+                is_startx = True
+            if super_tile_chunk[1] == 0:
+                is_starty = True
+            if super_tile_chunk[0] == super_tile_chunks[-1][0]:
+                is_endx = True
+            if super_tile_chunk[1] == super_tile_chunks[-1][1]:
+                is_endy = True
+
+
+            curr_im = clahe(curr_im, startx, trail_x, starty, trail_y, GLB_MIN, GLB_MAX, is_startx, is_starty, is_endx, is_endy)
             #curr_im = Image.fromarray((exposure.equalize_adapthist(np.array(curr_im), kernel_size=1024)//255).astype(np.uint8))
 
             # ?? is result better with single thread, single clahe, single write
