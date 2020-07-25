@@ -555,12 +555,12 @@ def ngshard():
 
             gc.collect()
             if write_raw:
-                if zstart % shard_size == 0:
+                if glb_zstart % shard_size == 0:
                     # only support shard aligned now
                     for iterz in range((zstart-glb_zstart), (zstart-glb_zstart) + 512, 512):
                         for itery in range(0, 1024, 512):
                             for iterx in range(0, 1024, 512):
-                                vol3d_temp = vol3d[iterz:(iterz+512), itery:(itery+512), iterx:(iterx+512)]
+                                vol3d_temp = vol3d[(iterz%512):((iterz%512)+512), itery:(itery+512), iterx:(iterx+512)]
     
                                 # ignore if empty
                                 currsize = vol3d_temp.shape
@@ -579,11 +579,11 @@ def ngshard():
                     for iterz in range((zstart-glb_zstart), (zstart-glb_zstart) + 512, 256):
                         for itery in range(0, 1024, 256):
                             for iterx in range(0, 1024, 256):
-                                vol3d_temp = vol3d[iterx:(iterx+256), itery:(itery+256), iterz:(iterz+256)]
+                                vol3d_temp = vol3d[iterx:(iterx+256), itery:(itery+256), (iterz%512):((iterz%512)+256)]
                                 currsize = vol3d_temp.shape
                                 if currsize[0] == 0 or currsize[1] == 0 or currsize[2] == 0:
                                     continue
-                                start_temp = (start[0]+iterx, start[1]+itery, start[2]+iterz) 
+                                start_temp = (start[0]+iterx, start[1]+itery, start[2]+(iterz%512)) 
                                 
                                 _write_shard(level, start_temp, vol3d_temp, "jpeg", dataset_jpeg)
                 else:
