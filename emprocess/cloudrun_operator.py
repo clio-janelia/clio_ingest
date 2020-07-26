@@ -116,12 +116,24 @@ class CloudRunBatchOperator(BaseOperator):
             time.sleep(delay)
 
         results = {}
+        assigned = set()
+
         failure = None
         remaining_threads = self.num_threads
         num_workers = self.num_workers
 
         if len(mini_tasks) > 0:
             self.log.info(f"Params: {json.dumps(mini_tasks[0])}")
+
+        glb_lock = threading.Lock()
+
+        def is_available(id):
+            with glb_lock:
+                if id in assigned:
+                    return False
+                else:
+                    assigned.add(id)
+                    return True
 
         def run_query(thread_id):
             nonlocal failure
@@ -145,7 +157,8 @@ class CloudRunBatchOperator(BaseOperator):
                 for idx, [id, task] in enumerate(mini_tasks):
                     if failure is not None:
                         break # exit thread if a failure is detected
-                    if (idx % self.num_threads) == thread_id:
+                    #if (idx % self.num_threads) == thread_id:
+                    if is_available(idx):
                         params = json.dumps(task)
                         #self.log.info(f"(thread {thread_id}) start http {id} {params}") 
                         self.log.info(f"(thread {thread_id}) start http {id}") 
