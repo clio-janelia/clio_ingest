@@ -20,6 +20,7 @@ import threading
 from skimage import exposure
 import gc
 import gzip
+from skimage.transform import downscale_local_mean
 
 import time
 import psutil
@@ -515,13 +516,16 @@ def ngshard():
 
             # just call interpolate over whole volume if large enough
             if x <= 256 and y <= 256 and z <= 256:
-                return ndimage.interpolation.zoom(vol, 0.5, order=1, mode=mode)
+                #return ndimage.interpolation.zoom(vol, 0.5, order=1, mode=mode)
+                return downscale_local_mean(vol, (2,2,2)).astype(vol.dtype, copy=False)
             
             target = np.zeros((round(x/2),round(y/2),round(z/2)), dtype=np.uint8)
             for xiter in range(0, x, 256):
                 for yiter in range(0, y, 256):
                     for ziter in range(0, z, 256):
-                        target[(xiter//2):((xiter+256)//2), (yiter//2):((yiter+256)//2), (ziter//2):((ziter+256)//2)] = ndimage.interpolation.zoom(vol[xiter:(xiter+256),yiter:(yiter+256),ziter:(ziter+256)], 0.5, order=1, mode=mode)
+                        #target[(xiter//2):((xiter+256)//2), (yiter//2):((yiter+256)//2), (ziter//2):((ziter+256)//2)] = ndimage.interpolation.zoom(vol[xiter:(xiter+256),yiter:(yiter+256),ziter:(ziter+256)], 0.5, order=1, mode=mode)
+                        target[(xiter//2):((xiter+256)//2), (yiter//2):((yiter+256)//2), (ziter//2):((ziter+256)//2)] = downscale_local_mean(vol[xiter:(xiter+256),yiter:(yiter+256),ziter:(ziter+256)], (2,2,2)).astype(vol.dtype, copy= False)
+
             return target 
         
         ####### Iterate 512 slices at a time ########
@@ -585,9 +589,9 @@ def ngshard():
                                     continue
                                 start_temp = (start[0]+iterx, start[1]+itery, start[2]+(iterz%512)) 
                                 
-                                _write_shard(level, start_temp, vol3d_temp, "jpeg", dataset_jpeg)
+                                _ = _write_shard(level, start_temp, vol3d_temp, "jpeg", dataset_jpeg)
                 else:
-                    _write_shard(level, start, vol3d, "jpeg")
+                    _ = _write_shard(level, start, vol3d, "jpeg")
 
                 # downsample
                 #vol3d = ndimage.interpolation.zoom(vol3d, 0.5)
