@@ -235,6 +235,19 @@ for WORKER_POOL in WORKER_POOLS:
             # will be made public readable
             ghook.create_bucket(bucket_name=bucket_name + "_ng_" + run_id, project_id=project_id, storage_class="REGIONAL", location="US-EAST4")
 
+            # dump configuration
+            client = ghook.get_conn()
+            source = context["dag_run"].conf.get("source")
+            bucket = client.bucket(source + "_process")
+            blob = bucket.blob(blob_name=f"{context['dag_run'].run_id}/init.json")
+
+            data = context["dag_run"].conf
+            data["execution_date"] = str(context.get("execution_date")) 
+            data = json.dumps(data)
+            blob.upload_from_string(data) 
+
+
+
     # create UUID for dag run and necessary gbuckets
     create_env_t = PythonOperator(
             task_id="create_env",
@@ -331,7 +344,7 @@ for WORKER_POOL in WORKER_POOLS:
             client = ghook.get_conn()
             source = context["dag_run"].conf.get("source")
             bucket = client.bucket(source + "_process")
-            blob = bucket.blob(blob_name=f"{context['dag_run'].run_id}/ingestion_dagrun.txt")
+            blob = bucket.blob(blob_name=f"{context['dag_run'].run_id}/complete.json")
             project_id = context["dag_run"].conf.get("project_id")
 
             data = context["dag_run"].conf
