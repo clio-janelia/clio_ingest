@@ -4,7 +4,7 @@
 
 Command line json:
 {
-    email: foo@bar # where to send results
+    email: foo@bar # where to send results (currently disabled)
     createRawPyramid: True # create raw scale pyramid in addition to jpeg (True is default)
     image: "template%d.png", # template name
     minz: 0, # first slice
@@ -23,9 +23,7 @@ Airflow Configuration:
 Setup a pool with  workers for lightweight http requests
 called "http_requests" to be equal to the WORKER_POOL.
 
-Setup a default email for airflow notifications
-
-Configure email smptp as appropriate
+Configure email smptp as appropriate (currently disabled)
 
 Conn id:
 
@@ -48,7 +46,7 @@ from airflow.operators.python_operator import PythonOperator, BranchPythonOperat
 from airflow.contrib.hooks.gcs_hook import GoogleCloudStorageHook
 from datetime import datetime
 from airflow.utils.trigger_rule import TriggerRule
-from airflow.operators.email_operator import EmailOperator
+#from airflow.operators.email_operator import EmailOperator
 from airflow.operators.bash_operator import BashOperator
 from airflow.operators.subdag_operator import SubDagOperator
 from airflow.models import Variable
@@ -100,8 +98,8 @@ for WORKER_POOL in WORKER_POOLS:
             "owner": "airflow",
             "retries": 1,
             "start_date": START_DATE,
-            "email_on_failure": True,
-            "email_on_retry": True,
+            #"email_on_failure": True,
+            #"email_on_retry": True,
             }
 
     dag = DAG(
@@ -307,6 +305,8 @@ for WORKER_POOL in WORKER_POOLS:
                     dag=dag,
                 )
 
+
+    """
     # notify user
     notify_t = EmailOperator(
             task_id="notify",
@@ -315,7 +315,8 @@ for WORKER_POOL in WORKER_POOLS:
             html_content="Job finished.  View on neuroglancer (source = precomputed://gs://{{ dag_run.conf['source'] }}_ng_{{ run_id }}/neuroglancer/jpeg)",
             dag=dag
     )
- 
+    """
+
     read_config = [
                 {
                   "origin": ["*"],
@@ -364,6 +365,7 @@ for WORKER_POOL in WORKER_POOLS:
     validate_t >> create_env_t >> align_start_t
     align_end_t >> ngingest_start_t
     [align_end_t, ngingest_end_t] >> isaligned_t >> cleanup_t 
-    [ngingest_end_t, cleanup_t] >> set_public_read_t >> notify_t >> write_status_t
+    #[ngingest_end_t, cleanup_t] >> set_public_read_t >> notify_t >> write_status_t
+    [ngingest_end_t, cleanup_t] >> set_public_read_t >> write_status_t
 
 
