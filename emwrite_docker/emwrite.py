@@ -144,6 +144,7 @@ def alignedslice():
 
         GLB_MIN, GLB_MAX =  curr_im.getextrema()
         GLB_MIN = 0 # always assume pressence of 0 pixel somewhere
+        GLB_MAX = 255 # stretch distribution for now
 
         # make small thumbnail for first tile or only tile
         # (mostly for debugging or quick viewing in something like fiji)
