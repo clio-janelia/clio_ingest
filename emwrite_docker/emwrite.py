@@ -93,7 +93,7 @@ def alignedslice():
                     """
 
                     # use modified image to run clahe
-                    im_sub = (exposure.equalize_adapthist(im_sub, kernel_size = 1024, clip_limit=0.02)*255).astype(np.uint8)
+                    im_sub = (exposure.equalize_adapthist(im_sub, kernel_size = 1024, clip_limit=0.025)*255).astype(np.uint8)
                     
                     # reset zeros
                     im_sub[ im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)] == 0 ] = 0
