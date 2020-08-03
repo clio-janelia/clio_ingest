@@ -520,7 +520,7 @@ def ngshard():
                 #return ndimage.interpolation.zoom(vol, 0.5, order=1, mode=mode)
                 return downscale_local_mean(vol, (2,2,2)).astype(vol.dtype, copy=False)[:x//2, :y//2, :z//2]
             
-            target = np.zeros((round(x/2),round(y/2),round(z/2)), dtype=np.uint8)
+            target = np.zeros((x//2,y//2,z//2), dtype=np.uint8)
             for xiter in range(0, x, 256):
                 for yiter in range(0, y, 256):
                     for ziter in range(0, z, 256):
