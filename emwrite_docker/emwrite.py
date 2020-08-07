@@ -275,8 +275,8 @@ def alignedslice():
 
                             binary_volume = "".encode()
                             sizes = []
-                            for chunky in range(y, min(y+MAX_IMAGE_SIZE, height), shard_size):
-                                for chunkx in range(x, min(x+MAX_IMAGE_SIZE, width), shard_size):
+                            for chunky in range(y, min(y+MAX_IMAGE_SIZE, (height-trail_y)), shard_size):
+                                for chunkx in range(x, min(x+MAX_IMAGE_SIZE, (width-trail_x)), shard_size):
                                     tile = np.array(curr_im.crop((chunkx-OVERLAP_SIZE, chunky-OVERLAP_SIZE, chunkx+shard_size+OVERLAP_SIZE, chunky+shard_size+OVERLAP_SIZE)))
                                     #tile = (exposure.equalize_adapthist(tile, kernel_size=1024)*255).astype(np.uint8)
                                     tile = tile[OVERLAP_SIZE:-OVERLAP_SIZE, OVERLAP_SIZE:-OVERLAP_SIZE]
