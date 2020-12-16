@@ -21,6 +21,7 @@ from skimage import exposure
 import gc
 import gzip
 from skimage.transform import downscale_local_mean
+from scipy.ndimage import gaussian_filter
 
 import time
 import psutil
@@ -52,6 +53,7 @@ def alignedslice():
     """
     try:
         config_file  = request.get_json()
+        clip_limit = config_file.get("clip-limit", 0.02)
 
         def clahe(im, pad_x0, pad_x1, pad_y0, pad_y1, glb_min, glb_max, is_xstart=True, is_ystart=True, is_xend=True, is_yend=True):
             im = np.array(im)
@@ -93,7 +95,8 @@ def alignedslice():
                     """
 
                     # use modified image to run clahe
-                    im_sub = (exposure.equalize_adapthist(im_sub, kernel_size = 1024, clip_limit=0.025)*255).astype(np.uint8)
+                    #im_sub = gaussian_filter(im_sub, sigma=1)
+                    im_sub = (exposure.equalize_adapthist(im_sub, kernel_size = 1024, clip_limit=clip_limit)*255).astype(np.uint8)
                     
                     # reset zeros
                     im_sub[ im[ystart:(y+CLAHE_SIZE+OVERLAP_SIZE), xstart:(x+CLAHE_SIZE+OVERLAP_SIZE)] == 0 ] = 0
@@ -170,8 +173,9 @@ def alignedslice():
         
             # normalize image (even though potentially downsampled heavily)
             
-            im_small = clahe(im_small, 0, 0, 0, 0, GLB_MIN, GLB_MAX) 
-            #im_small = Image.fromarray((exposure.equalize_adapthist(np.array(im_small), kernel_size=1024)*255).astype(np.uint8))
+            if clip_limit > 0:
+                im_small = clahe(im_small, 0, 0, 0, 0, GLB_MIN, GLB_MAX) 
+                #im_small = Image.fromarray((exposure.equalize_adapthist(np.array(im_small), kernel_size=1024)*255).astype(np.uint8))
         
             # write output to bucket
             im_small.save(output, format="PNG")
@@ -252,8 +256,9 @@ def alignedslice():
                 is_endy = True
 
 
-            curr_im = clahe(curr_im, startx, trail_x, starty, trail_y, GLB_MIN, GLB_MAX, is_startx, is_starty, is_endx, is_endy)
-            #curr_im = Image.fromarray((exposure.equalize_adapthist(np.array(curr_im), kernel_size=1024)//255).astype(np.uint8))
+            if clip_limit > 0:
+                curr_im = clahe(curr_im, startx, trail_x, starty, trail_y, GLB_MIN, GLB_MAX, is_startx, is_starty, is_endx, is_endy)
+                #curr_im = Image.fromarray((exposure.equalize_adapthist(np.array(curr_im), kernel_size=1024)//255).astype(np.uint8))
 
             # ?? is result better with single thread, single clahe, single write
             NUM_THREADS = 4
