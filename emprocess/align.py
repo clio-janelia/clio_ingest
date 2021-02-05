@@ -429,7 +429,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
                     "minz": "{{ dag_run.conf['minz'] }}",
                     "maxz": "{{ dag_run.conf['maxz'] }}",
                     "image": "{{ dag_run.conf['image'] }}",
-                    "clip-limit": "{{ dag_run.conf.get('clip-limit', 0.02) }}"
+                    "clip-limit": "{{ dag_run.conf.get('clip-limit', 0.02) }}",
                     "dest-tmp": "{{ dag_run.conf['source'] }}_tmp_{{ run_id }}",
                     "shard-size": SHARD_SIZE,
                     "collect_id": collect_id,
