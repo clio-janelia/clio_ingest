@@ -108,6 +108,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
         minz = context["dag_run"].conf.get("minz")
         maxz = context["dag_run"].conf.get("maxz")
         downsample_factor = context["dag_run"].conf.get("downsample_factor", 1)
+        skip_align = bool(context["dag_run"].conf.get("skip_align", False))
         project_id = context["dag_run"].conf.get("project_id")
 
         def calculate_transform(x, y, affine):
@@ -145,12 +146,14 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
                 dy = trans[5] - (1 - trans[3])*height/2 + trans[1]*width/2
                 return [trans[0], -trans[2], -trans[1], trans[3], dx, dy]
 
-            affine = adjust_trans(res["affine"])
-            translation = adjust_trans(res["translation"])
+            # if skipping alignment, just use the identity transform
+            if not skip_align:
+                affine = adjust_trans(res["affine"])
+                translation = adjust_trans(res["translation"])
 
-            # use translatee coefficients if image rotated less than 0.5 percent
-            if affine[2] <= 0.0008:
-                affine = translation
+                # use translatee coefficients if image rotated less than 0.5 percent
+                if affine[2] <= 0.0008:
+                    affine = translation
             return affine, [width, height], [width0, height0]
 
         # read each transform and create global coordinate system
@@ -296,6 +299,7 @@ def align_dataset_psubdag(dag, name, NUM_WORKERS, pool=None, TEST_MODE=False, SH
     # task callable that generates batch assignment to align slices for the provided worker
     def align_worker(worker_id, num_workers, data, **context):
         downsample_factor = int(data["downsample_factor"])
+
         minz = int(data["minz"])
         maxz = int(data["maxz"])
         source = data["source"]

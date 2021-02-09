@@ -11,6 +11,7 @@ Command line json:
     maxz: 50, # last slice
     source: bucket_name # location of stored pngs
     downsample_factor: 4 # how much to downsample before aligning
+    skip_align: False # set true to do alignment with identity transform (i.e.e, no alignment)
     "id": "name of dataset"
 }
 
@@ -147,6 +148,11 @@ for WORKER_POOL in WORKER_POOLS:
         downsample_factor = kwargs['dag_run'].conf.get('downsample_factor', 1)
         logging.info(f"Downsample factor: {downsample_factor}")
 
+
+        # log downsample factor
+        skip_align  = kwargs['dag_run'].conf.get('downsample_factor', False)
+        logging.info(f"Skip alignment: {skip_align}")
+
         # format string for image name
         name = kwargs['dag_run'].conf.get('image')
         if name is None:
@@ -254,7 +260,7 @@ for WORKER_POOL in WORKER_POOLS:
             op_kwargs={"run_id": "{{run_id}}"},
             dag=dag,
             )
-    # expects dag run configruation with "image", "minz", "maxz", "source", "project", and "downsample_factor"
+    # expects dag run configruation with "image", "minz", "maxz", "source", "project" and optionally "downsample_factor" and "skip_align"
     align_start_t, align_end_t = align.align_dataset_psubdag(dag, DAG_NAME+".align", WORKER_POOL,
             "http_requests", TEST_MODE, SHARD_SIZE)
 
