@@ -200,28 +200,29 @@ Then run:
 
 Navigate to [neuroglancer](https://neuroglancer-demo.appspot.com/) and point the source to precomputed://gs://[bucket name]/neuroglancer/jpeg.
 
-## Step-by-step User Guide (Cloud-hosted)
+## Step-by-step user guide (cloud-based)
 
 The preferred way to run Clio ingestion is by hosting the ecosystem on Google Cloud.  The technologies
 used in Clio on Google Cloud should be relatively straighforward to deploy on Amazon AWS.  Apache Airflow
 can be run in any cloud environment and AWS has a serverless container capability similar to Google Cloud Run.
 
-This section will go over how to setup a new cloud environment with Clio, preparing a dataset for ingestion,
-running the workflow (including monitoring and troubleshooting), and data management.  The main
-outcome of running this workflow is the creation of a data volume that is viewable in neuroglancer
-and the creation of aligned chunk volumes for data processing.  One can add the ingested volume
+This section will go over how to setup a new cloud environment with Clio, prepare a dataset for ingestion,
+run the workflow (including monitoring and troubleshooting), and data management.  The main
+outcome of running this workflow is the creation of a data volume (with lossy compression) that is viewable in neuroglancer
+and the creation of aligned chunk volumes for data processing (though the lossy compression can be used instead).  One can add the ingested volume
 into a data volume through the [clio-store](https://github.com/clio-janelia/clio-store) interface
-and viewable in the Javascript [clio client](https://github.com/clio-janelia/clio_website).
+and viewable in the Javascript [clio client](https://github.com/clio-janelia/clio_website).  An example of this interface
+in action can be found at [clio janelia](https://clio.janelia.org).
 
 ### Setting up a google environment
 
-(more detailed instructions can be found on Google's cloud documentation).
+(more detailed instructions for creating an account can be found on Google's cloud documentation).
 
 **Basic setup**
 
 * Create a new project with billing setup.  In general, it will cost around $50 per month per TB to host
-data.  This cost can be reduced significantly by archiving some of the source data (details below).  One could
-expect around $10 per TB per month roughly.  Ingestion costs will vary based on several factors  but around $100 per TB for ingestion is a reasonable estimate.
+Clio data.  This cost can be reduced significantly by archiving some of the source data (details below).  One could
+expect around $10 per TB per month roughly.  Ingestion computational costs will vary based on several factors  but around $100 per TB for ingestion is a reasonable estimate.
 * Install gcloud locally and setup default project
 	% gcloud config set project PROJECT_NAME
 * Enable the Google Composer (managed Apache Airflow) API (more details above)
@@ -234,11 +235,11 @@ Deploy [emwrite](https://github.com/clio-janelia/clio_ingest/tree/master/emwrite
 [fiji](https://github.com/janelia-flyem/fiji_cloudrun) to Cloud Run.  When deploying,
 you have options for the number of cores and amount of memory for each VM and the number
 of concurrent processes each Cloud Run instance will handle.  For Clio, set the number
-of conccurent proceses to 1 and chooes 1 or 2 cores.  The computation is largely
+of concurrent processes to 1 and choose 1 or 2 cores.  The computation is largely
 single threaded but there are some performance improvements for choosing 2 cores.
 4GB should be a conservative memory threshold.
 
-### Setting up an ingestion
+### Setting up an ingestion workflow
 
 This workflow requires that a stack of consecutively numbered
 2D images are loaded into a google bucket directory.  It has been tested on 2D 8bit PNGs
@@ -269,7 +270,7 @@ To launch a new ingestion, it is good to create a unique ID: 1) each 'dag run' n
 id and 2) the current use of neuroglancer precomputed format requires the datasest to be public.  By having
 a long identifier, the bucket location will act as a secure link.
 
-	% python scripts/gen_uuid.py RUN_NAME
+	% python scripts/gen_uuid.py RUN_NAME # => RUN_ID
 
 This will append a random id to RUN_NAME to use when ingesting data.
 
@@ -277,8 +278,9 @@ A Composer Airflow workflow can be launched via the command line.
 
 	% gcloud composer environments run emprocess --location us-east4 trigger_dag -- emprocess_width32_v0.1 --conf '{"id": "RUN_ID", "email": "foo@bar.com", "image": "img.%05d.png", "minz": 0, "maxz": 13695, "source": "BUCKET_NAME", "project": "PROJECT_NAME", "downsample_factor": 4, "resolution": 8}' --run_id RUN_ID
 
+This command is non-blocking and should return quickly.
 The downsample factor should be set to ensure that the 2D dimensions is no larger than around 5000x5000.  One can
-also set "clip-limit" (default 0.02) which will greatly impact the contrast of the image using CLAHE.  A clip limit of 0 will disable constrast adjustment.  This command is non-blocking and should return quickly.
+also set "clip-limit" (default 0.02) which will greatly impact the contrast of the image using CLAHE.  A clip limit of 0 will disable constrast adjustment.  
 
 When the job is complete (see monitoring below), the following google buckets will be created in addition to the
 starting BUCKET_NAME:
@@ -291,22 +293,21 @@ starting BUCKET_NAME:
 ### Monitoring
 
 The ingestion times are impacted by several variables.  As a rough estimate, expect around 1 hour per TB.
-To monitor the progress, one can open the  clio_report.ipynb notebook.  The notebook should be run
-with the GOOGLE_APPLICATION_CREDENTIALS set to a authorized token for accessing to the cloud project.
+To monitor the progress, one can open the clio_report.ipynb notebook.  The notebook should be run
+with the GOOGLE_APPLICATION_CREDENTIALS set to an authorized token for accessing to the cloud project.
 
-For a coarser (but more user friendly) interface, one can go to the Apache Airflow web interface
+For a coarser (but more user friendly) user interface, one can go to the Apache Airflow web interface
 accessible through the Google Composer cloud page.  This web application will let one monitor running
 workflows.  If one clicks on the appropriate DAG, the current execution status is visible.
 The UI will indicate whether a task fails and allows one to manually restart it.  This can be useful
 in a situation where a workflow mostly runs correctly but fails due to a small, fixable bug.  Once
-the bug is fixed, the error state can be cleared and the workflow will continue.
+the bug is fixed, the error state can be manually cleared and the workflow will continue.
 
 Other information on the job can be found in the BUCKET_NAME_process directory.
 
 ### Data management and miscellaneous options
 
 Below are different workflow options and data management scenarios:
-
 
 * To save money: delete or archive data (for instance BUCKET_NAME_chunk_RUN_ID directories)
 
@@ -391,7 +392,7 @@ like a reasonable approach except some tasks are just a lot more efficiently imp
 custom operators and embedded logic.
 
 
-### emprocess_workflow Design
+### emprocess_workflow design
 
 The original implementation for emprocess workflow allowed dynamicism to be achieved by setting 
 Airflow variables, which could be parsed and used to create a dataset-specific DAG based on the number
@@ -475,3 +476,11 @@ recommended), it is not possible (without orchestrating multiple writers to the 
 to have a scale level higher than 4 (where
 0 is maximum resolution) unless an initial shard size over 1024 is used or more sophisticated
 inter-process communication is employed.
+
+## Future work
+
+* Improved support for ingesting large multi-channel datasets (e.g., to support CLEM applications)
+* Workflow option to rerun export of the dataset based on a previously run alignment.  This will make it faster to re-export a volume using different contrast adjustment.
+* Workflow option to load dataset into clio-store
+* Logic to recognize single, "bad" images.  A single bad image can be effectively 'deleted' and the previous or next image can be duplicated instead.
+
