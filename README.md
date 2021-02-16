@@ -14,8 +14,10 @@ service and can be minimally provisioned.  The bulk of computation used by the w
 leverages Google Cloud Run, which are stateless containers, where 100s can be spawned
 in a "serverless" manner.
 
-The documentation below explains how to install and use the service.  At the end, there is some discussion
+The documentation below explains how to install and a step-by-step guide for using the service.
+At the end, there is some discussion
 on the underlying architecture and design decisions.
+
 
 ## Installation and configuration
 
@@ -130,7 +132,7 @@ the example will run very slowly as only one task can run at a time and the sche
 seconds until a new task is picked up.  This is not a limitatioin of Airflow
 in general but rather of this very simple scheduler.  It is also not a problem when using Google Composer.
 
-## Running a workflow
+## Running a workflow from a local install
 
 To process a stack of EM images, the following needs to be done.
 
@@ -197,6 +199,131 @@ Then run:
 	% gsutil cors set cors.json gs://[bucket name]
 
 Navigate to [neuroglancer](https://neuroglancer-demo.appspot.com/) and point the source to precomputed://gs://[bucket name]/neuroglancer/jpeg.
+
+## Step-by-step User Guide (Cloud-hosted)
+
+The preferred way to run Clio ingestion is by hosting the ecosystem on Google Cloud.  The technologies
+used in Clio on Google Cloud should be relatively straighforward to deploy on Amazon AWS.  Apache Airflow
+can be run in any cloud environment and AWS has a serverless container capability similar to Google Cloud Run.
+
+This section will go over how to setup a new cloud environment with Clio, preparing a dataset for ingestion,
+running the workflow (including monitoring and troubleshooting), and data management.  The main
+outcome of running this workflow is the creation of a data volume that is viewable in neuroglancer
+and the creation of aligned chunk volumes for data processing.  One can add the ingested volume
+into a data volume through the [clio-store](https://github.com/clio-janelia/clio-store) interface
+and viewable in the Javascript [clio client](https://github.com/clio-janelia/clio_website).
+
+### Setting up a google environment
+
+(more detailed instructions can be found on Google's cloud documentation).
+
+**Basic setup**
+
+* Create a new project with billing setup.  In general, it will cost around $50 per month per TB to host
+data.  This cost can be reduced significantly by archiving some of the source data (details below).  One could
+expect around $10 per TB per month roughly.  Ingestion costs will vary based on several factors  but around $100 per TB for ingestion is a reasonable estimate.
+* Install gcloud locally and setup default project
+	% gcloud config set project PROJECT_NAME
+* Enable the Google Composer (managed Apache Airflow) API (more details above)
+* Enable the [Cloud registry]((https://cloud.google.com/artifact-registry/docs/enable-service)
+	% gcloud services enable artifactregistry.googleapis.com
+
+**Cloud Run setup**
+
+Deploy [emwrite](https://github.com/clio-janelia/clio_ingest/tree/master/emwrite_docker) and
+[fiji](https://github.com/janelia-flyem/fiji_cloudrun) to Cloud Run.  When deploying,
+you have options for the number of cores and amount of memory for each VM and the number
+of concurrent processes each Cloud Run instance will handle.  For Clio, set the number
+of conccurent proceses to 1 and chooes 1 or 2 cores.  The computation is largely
+single threaded but there are some performance improvements for choosing 2 cores.
+4GB should be a conservative memory threshold.
+
+### Setting up an ingestion
+
+This workflow requires that a stack of consecutively numbered
+2D images are loaded into a google bucket directory.  It has been tested on 2D 8bit PNGs
+but should work on other image formats.  (For now, 16 bit images should be converted to 8bit
+first.  It should be relatively straightforward to add this conversion within the ingestion workflow.)
+
+As an example, this is how images produced using our FIB-SEM acquisition software is uploaded.
+
+* Renumber images
+	% python scripts/create_symlinks.py IMG_DIR images
+* Create google storage bucket BUCKET_NAME (standard class, choose a local region, uniform permission).
+By convention, prepend "clio_" to the bucket name.
+* Upload images (ideally from a machine with great bandwidth)
+	% gsutil -m cp img.* gs://BUCKET_NAME
+
+### Running ingestion
+
+The composer environment can be launched via command line:
+
+	% bash scripts/create_composer_env.sh PROJECT_NAME FIJI_CLOUD_RUN_ADDR EMWRITE_CLOUDRUN_ADDR
+
+The script will create a cluster of 3 n1-standard-2 machines, which will allow the pipeline
+to run with 36 workers (12 workers per machine).  To run more airflow workers, you will need bigger
+memory machines.  However, since each worker will spawn multiple concurrent cloud run instances
+the effective concurrency is 256 tasks.
+
+To launch a new ingestion, it is good to create a unique ID: 1) each 'dag run' needs a unique
+id and 2) the current use of neuroglancer precomputed format requires the datasest to be public.  By having
+a long identifier, the bucket location will act as a secure link.
+
+	% python scripts/gen_uuid.py RUN_NAME
+
+This will append a random id to RUN_NAME to use when ingesting data.
+
+A Composer Airflow workflow can be launched via the command line.
+
+	% gcloud composer environments run emprocess --location us-east4 trigger_dag -- emprocess_width32_v0.1 --conf '{"id": "RUN_ID", "email": "foo@bar.com", "image": "img.%05d.png", "minz": 0, "maxz": 13695, "source": "BUCKET_NAME", "project": "PROJECT_NAME", "downsample_factor": 4, "resolution": 8}' --run_id RUN_ID
+
+The downsample factor should be set to ensure that the 2D dimensions is no larger than around 5000x5000.  One can
+also set "clip-limit" (default 0.02) which will greatly impact the contrast of the image using CLAHE.  A clip limit of 0 will disable constrast adjustment.  This command is non-blocking and should return quickly.
+
+When the job is complete (see monitoring below), the following google buckets will be created in addition to the
+starting BUCKET_NAME:
+
+* BUCKET_NAME_ng_RUN_ID (neuroglancer accessible bucket for viewing data -- JPEG compression)
+* BUCKET_NAME_chunk_RUN_ID (raw chunk data for data processing -- lossless)
+* BUCKET_NAME_tmp_RUN_ID (contains temporary files that will be automatically deleted)
+* BUCKET_NAME_procces (contains debugging information for every RUN_ID)
+
+### Monitoring
+
+The ingestion times are impacted by several variables.  As a rough estimate, expect around 1 hour per TB.
+To monitor the progress, one can open the  clio_report.ipynb notebook.  The notebook should be run
+with the GOOGLE_APPLICATION_CREDENTIALS set to a authorized token for accessing to the cloud project.
+
+For a coarser (but more user friendly) interface, one can go to the Apache Airflow web interface
+accessible through the Google Composer cloud page.  This web application will let one monitor running
+workflows.  If one clicks on the appropriate DAG, the current execution status is visible.
+The UI will indicate whether a task fails and allows one to manually restart it.  This can be useful
+in a situation where a workflow mostly runs correctly but fails due to a small, fixable bug.  Once
+the bug is fixed, the error state can be cleared and the workflow will continue.
+
+Other information on the job can be found in the BUCKET_NAME_process directory.
+
+### Data management and miscellaneous options
+
+Below are different workflow options and data management scenarios:
+
+
+* To save money: delete or archive data (for instance BUCKET_NAME_chunk_RUN_ID directories)
+
+	(scripts) % bash delete_bucket.sh BUCKET # lazy delete of bucket contents
+	(scripts) % bash coldline_bucket.sh BUCKET # move data to cheaper coldline storage
+
+* To make a directory publicly accessible and CORS accessible for NG
+	(scripts) % bash set_bucket_public.sh BUCKET
+
+* Prototype script for loading an RGBA volume into NG (TODO: add an ingestion option for Airflow workflow):
+	% python scripts/ingest_multichannel_small.py image_prefix minz maxz bucket path resolution
+ 
+* Transfer data to a collaborator by using Google's data transfer utility
+
+* Add dataset to [clio-store](https://github.com/clio-janelia/clio-store)
+
+* Run Clio workflow without alignment (no op) by setting "skip_align" to true
 
 ## Architecture Description
 
