@@ -224,9 +224,12 @@ in action can be found at [clio janelia](https://clio.janelia.org).
 Clio data.  This cost can be reduced significantly by archiving some of the source data (details below).  One could
 expect around $10 per TB per month roughly.  Ingestion computational costs will vary based on several factors  but around $100 per TB for ingestion is a reasonable estimate.
 * Install gcloud locally and setup default project
+	
 	% gcloud config set project PROJECT_NAME
+	
 * Enable the Google Composer (managed Apache Airflow) API (more details above)
 * Enable the [Cloud registry]((https://cloud.google.com/artifact-registry/docs/enable-service)
+	
 	% gcloud services enable artifactregistry.googleapis.com
 
 **Cloud Run setup**
@@ -249,10 +252,12 @@ first.  It should be relatively straightforward to add this conversion within th
 As an example, this is how images produced using our FIB-SEM acquisition software is uploaded.
 
 * Renumber images
+	
 	% python scripts/create_symlinks.py IMG_DIR images
 * Create google storage bucket BUCKET_NAME (standard class, choose a local region, uniform permission).
 By convention, prepend "clio_" to the bucket name.
 * Upload images (ideally from a machine with great bandwidth)
+	
 	% gsutil -m cp img.* gs://BUCKET_NAME
 
 ### Running ingestion
@@ -315,9 +320,11 @@ Below are different workflow options and data management scenarios:
 	(scripts) % bash coldline_bucket.sh BUCKET # move data to cheaper coldline storage
 
 * To make a directory publicly accessible and CORS accessible for NG
+	
 	(scripts) % bash set_bucket_public.sh BUCKET
 
 * Prototype script for loading an RGBA volume into NG (TODO: add an ingestion option for Airflow workflow):
+	
 	% python scripts/ingest_multichannel_small.py image_prefix minz maxz bucket path resolution
  
 * Transfer data to a collaborator by using Google's data transfer utility
