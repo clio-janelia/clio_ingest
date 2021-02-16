@@ -317,6 +317,7 @@ Below are different workflow options and data management scenarios:
 * To save money: delete or archive data (for instance BUCKET_NAME_chunk_RUN_ID directories)
 
 	(scripts) % bash delete_bucket.sh BUCKET # lazy delete of bucket contents
+
 	(scripts) % bash coldline_bucket.sh BUCKET # move data to cheaper coldline storage
 
 * To make a directory publicly accessible and CORS accessible for NG
